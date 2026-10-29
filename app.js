@@ -18,8 +18,8 @@ function toast(t){const el=$('#toast');el.textContent=t;el.hidden=false;clearTim
 /* ---------- vistas ---------- */
 function route(){
   let v=(location.hash||'#revisar').slice(1);
-  if(!['revisar','resumen'].includes(v))v='revisar';
-  ['revisar','resumen'].forEach(n=>{$('#v-'+n).hidden=n!==v;const t=$('#t-'+n);if(n===v)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current')});
+  if(!['revisar','resumen','cargar'].includes(v))v='revisar';
+  ['revisar','resumen','cargar'].forEach(n=>{$('#v-'+n).hidden=n!==v;const t=$('#t-'+n);if(n===v)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current')});
   $('#bar').hidden=v!=='revisar';
   if(v==='resumen')renderResumen();
   window.scrollTo(0,0);
@@ -202,15 +202,114 @@ $('#copiar').addEventListener('click',()=>{
   try{navigator.clipboard.writeText(t).then(()=>toast('Texto copiado'),sel)}catch(e){sel()}
 });
 
-/* ---------- arranque ---------- */
-route();
-fetch('lista.json?v='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(data=>{
+/* ---------- aplicar una lista ---------- */
+let oficial=null;
+function aplicarLista(data,esLocal){
   fecha=data.fecha;
   const seen={};
   lista={items:(data.items||[]).map(i=>{let k=keyOf(i.c);if(seen[k]){seen[k]++;k+='~'+seen[k]}else seen[k]=1;return{g:i.g,c:String(i.c),q:Number(i.q),d:i.d,k}})};
-  try{marcas=JSON.parse(lsGet('av_marcas_'+fecha)||'{}')||{}}catch(e){marcas={}}
-  $('#fecha').innerHTML=`<option>${diaF(fecha)} ${fmtF(fecha)} · ${lista.items.length} artículos</option>`;
+  const mk='av_marcas_'+(esLocal?'local_':'')+fecha;
+  persist=()=>lsSet(mk,JSON.stringify(marcas));
+  try{marcas=JSON.parse(lsGet(mk)||'{}')||{}}catch(e){marcas={}}
+  $('#fecha').innerHTML=`<option>${diaF(fecha)} ${fmtF(fecha)} · ${lista.items.length} artículos${esLocal?' (cargada aquí)':''}</option>`;
   document.title='Control de existencias · '+fmtF(fecha);
+  const bn=$('#local-banner');
+  if(esLocal){bn.hidden=false;bn.innerHTML=`Estás usando una lista cargada en este teléfono (${esc(data.origen||'archivo')}). <button type="button" class="add-nota" id="volver">Volver a la lista oficial</button>`;$('#volver').addEventListener('click',()=>{try{localStorage.removeItem('av_lista_local')}catch(e){}if(oficial)aplicarLista(oficial,false);else location.reload()})}
+  else bn.hidden=true;
   buildList();
-}).catch(()=>{lista=null;$('#fecha').innerHTML='<option>Sin lista</option>';buildList();renderStats()});
+}
+
+/* ---------- cargar lista desde PDF / texto ---------- */
+let parsed=null,origen='Texto pegado';
+$('#c-fecha').value=new Date().toLocaleDateString('en-CA');
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('No se pudo cargar el lector de PDF'));document.head.appendChild(s)})}
+async function pdfText(file){
+  if(!window.pdfjsLib){
+    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+  const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+  const lines=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const tc=await (await pdf.getPage(p)).getTextContent();
+    const rows={};
+    tc.items.forEach(t=>{if(!t.str)return;const y=Math.round(t.transform[5]/2)*2;(rows[y]=rows[y]||[]).push(t)});
+    Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>{
+      let s='',end=null;
+      rows[y].sort((a,b)=>a.transform[4]-b.transform[4]).forEach(t=>{const x=t.transform[4];if(end!==null&&x-end>1.5)s+=' ';s+=t.str;end=x+(t.width||0)});
+      lines.push(s);
+    });
+  }
+  return lines.join('\n');
+}
+function normQ(s){s=String(s);if(s.includes(','))s=s.replace(/\./g,'').replace(',','.');return Number(s)}
+function parseText(txt){
+  const m=txt.match(/const items=(\[[\s\S]*?\]);/);
+  if(m){try{return JSON.parse(m[1]).map(r=>({g:r.group,c:r.code,q:normQ(r.qty),d:r.desc}))}catch(e){}}
+  try{const j=JSON.parse(txt);if(j&&Array.isArray(j.items))return j.items}catch(e){}
+  const out=[];let g='';
+  txt.split(/\r?\n/).forEach(raw=>{
+    if(/[;\t]/.test(raw)){const p=raw.split(/[;\t]/).map(x=>x.trim());
+      if(p.length>=4&&/\d/.test(p[2])&&!isNaN(normQ(p[2]))){out.push({g:p[0],c:p[1],q:normQ(p[2]),d:p.slice(3).join(' ')});return}
+      if(p.length===3&&!isNaN(normQ(p[1]))){out.push({g:g||'SIN PROVEEDOR',c:p[0],q:normQ(p[1]),d:p[2]});return}}
+    const l=raw.replace(/\s+/g,' ').trim();if(!l)return;
+    let r=l.match(/^proveedor[:\s]+(\S+)/i);if(r){g=r[1].toUpperCase();return}
+    r=l.match(/^(\S*\d\S*)\s*[·|-]?\s*(\d{1,5}(?:[.,]\d{1,3})?)\s+(?:unidades?|uds?\.?)?\s*(.+)$/i);
+    if(r&&/[A-Za-z]/.test(r[3])){out.push({g:g||'SIN PROVEEDOR',c:r[1],q:normQ(r[2]),d:r[3].trim()});return}
+    r=l.match(/^(\S*\d\S*)\s+(.+?)\s+(\d{1,5}[.,]\d{1,3})$/);
+    if(r){out.push({g:g||'SIN PROVEEDOR',c:r[1],q:normQ(r[3]),d:r[2].trim()});return}
+    if(/^[A-Z]{2,5}$/.test(l))g=l;
+  });
+  return out;
+}
+const limpiar=items=>items.filter(i=>i.c&&Number(i.q)>0).map(i=>({g:String(i.g||'SIN PROVEEDOR').trim(),c:String(i.c).trim(),q:Number(i.q),d:String(i.d||'').replace(/\s+/g,' ').trim()}));
+async function leer(file){
+  const prev=$('#c-prev');prev.hidden=false;prev.innerHTML='<p class="hint" style="margin:0">Leyendo…</p>';
+  try{
+    let txt;
+    if(file){origen=file.name;txt=/\.pdf$/i.test(file.name)||file.type==='application/pdf'?await pdfText(file):await file.text();$('#c-text').value=txt.slice(0,20000)}
+    else{origen='Texto pegado';txt=$('#c-text').value}
+    parsed=limpiar(parseText(txt));
+    showPreview();
+  }catch(e){prev.innerHTML=`<div class="warnbox">${esc(e.message||'No se pudo leer el archivo')}. Prueba a pegar el texto en la casilla de arriba.</div>`}
+}
+function showPreview(){
+  const prev=$('#c-prev');
+  if(!parsed.length){prev.innerHTML='<div class="warnbox">No encontré artículos. Mira el texto leído en la casilla de arriba: cada línea debe tener código, cantidad y descripción. Con un PDF real del día se ajusta el lector a su formato.</div>';return}
+  const f=$('#c-fecha').value;
+  const provs=[...new Set(parsed.map(i=>i.g))];
+  prev.innerHTML=`<span class="lbl">Vista previa</span>
+    <p style="margin:0 0 10px"><b>${parsed.length}</b> artículos · ${provs.length} proveedores (${provs.map(esc).join(', ')})</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Prov.</th><th>Código</th><th>Cant.</th><th>Descripción</th></tr></thead><tbody>
+    ${parsed.map(i=>`<tr><td>${esc(i.g)}</td><td class="c">${esc(i.c)}</td><td class="n">${fmtQ(i.q)}</td><td>${esc(i.d)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="btnrow" style="margin-top:10px"><button class="btn" id="c-pub" type="button">Usar esta lista del ${fmtF(f)}</button></div>
+    <p class="hint"><span class="demo-tag">Ensayo</span> Se usará solo en este teléfono. En la versión final este botón dirá «Publicar para todos».</p>`;
+  $('#c-pub').addEventListener('click',()=>{
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(f)){toast('Elige la fecha de la lista');return}
+    const data={fecha:f,origen,items:parsed};
+    lsSet('av_lista_local',JSON.stringify(data));
+    aplicarLista(data,true);
+    parsed=null;$('#c-prev').hidden=true;$('#c-text').value='';$('#c-file').value='';
+    toast('Lista del '+fmtF(f)+' cargada en este teléfono');location.hash='#revisar';
+  });
+}
+$('#c-file').addEventListener('change',e=>{const f=e.target.files[0];if(f)leer(f)});
+$('#c-leer').addEventListener('click',()=>leer(null));
+$('#c-fecha').addEventListener('change',()=>{if(parsed&&parsed.length)showPreview()});
+const drop=$('#drop');
+['dragover','dragenter'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)leer(f)});
+
+/* ---------- arranque ---------- */
+route();
+let local=null;try{local=JSON.parse(lsGet('av_lista_local')||'null')}catch(e){}
+fetch('lista.json?v='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(data=>{
+  oficial=data;
+  if(local&&local.items&&local.items.length)aplicarLista(local,true);else aplicarLista(data,false);
+}).catch(()=>{
+  if(local&&local.items&&local.items.length){aplicarLista(local,true);return}
+  lista=null;$('#fecha').innerHTML='<option>Sin lista</option>';buildList();renderStats();
+});
 })();

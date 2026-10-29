@@ -148,6 +148,9 @@ td.c{font-family:var(--f-mono);font-size:.78rem;white-space:nowrap}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(86px + env(safe-area-inset-bottom,0px));z-index:9;background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;max-width:calc(100% - 32px);box-shadow:0 4px 14px rgba(0,0,0,.2)}
 .demo-tag{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);background:var(--warn-bg);padding:2px 8px;border-radius:999px}
 @media (max-width:520px){.brand h1{font-size:1.05rem}.brand small{font-size:.72rem;text-align:right}.datebar .lbl{display:none}.datebar select{padding:6px 8px;font-size:.92rem}.stats{font-size:.78rem;gap:2px 10px}nav.tabs a{padding:7px 4px 8px}header .wrap{gap:6px;padding-block:8px 0}}
+main .wrap>*{min-width:0}
+nav.tabs a{white-space:nowrap}
+@media (max-width:420px){nav.tabs a{font-size:.85rem;letter-spacing:.02em}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important}}
 </style>
 </head>
@@ -165,6 +168,7 @@ td.c{font-family:var(--f-mono);font-size:.78rem;white-space:nowrap}
     <nav class="tabs">
       <a href="#revisar" id="t-revisar">Revisar</a>
       <a href="#resumen" id="t-resumen">Resumen</a>
+      <a href="#cargar" id="t-cargar">Cargar lista</a>
     </nav>
   </div>
 </header>
@@ -172,6 +176,7 @@ td.c{font-family:var(--f-mono);font-size:.78rem;white-space:nowrap}
 <main>
   <!-- REVISAR -->
   <section id="v-revisar" class="wrap">
+    <div class="warnbox" id="local-banner" hidden></div>
     <div class="card">
       <label class="lbl" for="nombre">¿Quién revisa?</label>
       <input class="field" id="nombre" autocomplete="name" placeholder="Tu nombre (ej. Juan Lara)">
@@ -205,6 +210,28 @@ td.c{font-family:var(--f-mono);font-size:.78rem;white-space:nowrap}
       </div>
       <p class="hint">Las marcas se guardan en este teléfono. Envía el WhatsApp al terminar.</p>
     </div>
+  </section>
+  <!-- CARGAR -->
+  <section id="v-cargar" class="wrap" hidden>
+    <div class="card" style="display:grid;gap:12px">
+      <div>
+        <label class="lbl" for="c-fecha">Fecha de la lista</label>
+        <input class="field" type="date" id="c-fecha">
+      </div>
+      <div class="drop" id="drop">
+        <strong>Sube el PDF de la lista del día</strong>
+        <span class="hint" style="margin:0">También acepta el HTML anterior o un .txt / .csv</span>
+        <input type="file" id="c-file" accept=".pdf,.html,.htm,.txt,.csv,application/pdf,text/html,text/plain">
+      </div>
+      <div>
+        <label class="lbl" for="c-text">O pega el texto de la lista</label>
+        <textarea class="field" id="c-text" placeholder="Proveedor CEN&#10;CEN266401 14,00 PL - VODKA SMIRNOFF 1L. (1)&#10;CEN266471 1,00 PL - WHISKY JACK DANIEL´S 1L. (1)"></textarea>
+        <p class="hint">Una línea por artículo: código, cantidad y descripción. Una línea «Proveedor X» cambia de proveedor.</p>
+      </div>
+      <button class="btn ghost" id="c-leer" type="button">Leer lista</button>
+      <p class="hint" style="margin:0"><span class="demo-tag">Ensayo</span> Por ahora la lista que cargues solo se usa en este teléfono. En la versión final, al publicarla le llega a todos los repartidores.</p>
+    </div>
+    <div class="card" id="c-prev" hidden></div>
   </section>
 </main>
 

@@ -12,7 +12,11 @@ Lista de chequeo diaria para revisar existencias desde el celular. Versión de e
 - Las marcas se guardan en el navegador de ese teléfono, por fecha. Si recarga la página no se pierden.
 - En **Resumen** se ven los faltantes por proveedor y se envían por WhatsApp (o se copia el texto).
 
-## Actualizar la lista del día
+## Cargar lista (demostración)
+
+La pestaña **Cargar lista** lee un PDF, el HTML anterior o texto pegado, muestra la vista previa y permite usar esa lista. En esta versión de ensayo la lista cargada solo se usa en ese teléfono (botón «Volver a la lista oficial» para deshacer). En la versión final publicará la lista para todos. El lector de PDF es genérico: hay que ajustarlo con un PDF real del día.
+
+## Actualizar la lista oficial del día
 
 Reemplazar `lista.json` con este formato y hacer commit:
 
