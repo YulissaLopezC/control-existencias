@@ -264,20 +264,22 @@ function parseText(txt){
 }
 const limpiar=items=>items.filter(i=>i.c&&Number(i.q)>0).map(i=>({g:String(i.g||'SIN PROVEEDOR').trim(),c:String(i.c).trim(),q:Number(i.q),d:String(i.d||'').replace(/\s+/g,' ').trim()}));
 async function leer(file){
-  const prev=$('#c-prev');prev.hidden=false;prev.innerHTML='<p class="hint" style="margin:0">Leyendo…</p>';
+  const prev=$('#c-prev');prev.hidden=false;prev.innerHTML='<p class="hint" style="margin:0">Leyendo…</p>';verPrev();
   try{
     let txt;
     if(file){origen=file.name;txt=/\.pdf$/i.test(file.name)||file.type==='application/pdf'?await pdfText(file):await file.text();$('#c-text').value=txt.slice(0,20000)}
     else{origen='Texto pegado';txt=$('#c-text').value}
     parsed=limpiar(parseText(txt));
     showPreview();
-  }catch(e){prev.innerHTML=`<div class="warnbox">${esc(e.message||'No se pudo leer el archivo')}. Prueba a pegar el texto en la casilla de arriba.</div>`}
+  }catch(e){verPrev();toast('No se pudo leer');prev.innerHTML=`<div class="warnbox">${esc(e.message||'No se pudo leer el archivo')}. Prueba a pegar el texto en la casilla de arriba.</div>`}
 }
+function verPrev(){setTimeout(()=>{const el=$('#c-prev');const y=el.getBoundingClientRect().top+scrollY-$('header').offsetHeight-8;scrollTo({top:y,behavior:'smooth'})},60)}
 function showPreview(){
-  const prev=$('#c-prev');
-  if(!parsed.length){prev.innerHTML='<div class="warnbox">No encontré artículos. Mira el texto leído en la casilla de arriba: cada línea debe tener código, cantidad y descripción. Con un PDF real del día se ajusta el lector a su formato.</div>';return}
+  const prev=$('#c-prev');verPrev();
+  if(!parsed.length){toast('No encontré artículos');prev.innerHTML='<div class="warnbox">No encontré artículos. Mira el texto leído en la casilla de arriba: cada línea debe tener código, cantidad y descripción. Con un PDF real del día se ajusta el lector a su formato.</div>';return}
   const f=$('#c-fecha').value;
   const provs=[...new Set(parsed.map(i=>i.g))];
+  toast(parsed.length+' artículos leídos');
   prev.innerHTML=`<span class="lbl">Vista previa</span>
     <p style="margin:0 0 10px"><b>${parsed.length}</b> artículos · ${provs.length} proveedores (${provs.map(esc).join(', ')})</p>
     <div class="tbl-wrap"><table><thead><tr><th>Prov.</th><th>Código</th><th>Cant.</th><th>Descripción</th></tr></thead><tbody>
@@ -295,7 +297,7 @@ function showPreview(){
   });
 }
 $('#c-file').addEventListener('change',e=>{const f=e.target.files[0];if(f)leer(f)});
-$('#c-leer').addEventListener('click',()=>leer(null));
+$('#c-leer').addEventListener('click',()=>{if(!$('#c-text').value.trim()){toast('Pega el texto de la lista o sube un archivo');$('#c-text').focus();return}leer(null)});
 $('#c-fecha').addEventListener('change',()=>{if(parsed&&parsed.length)showPreview()});
 const drop=$('#drop');
 ['dragover','dragenter'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
