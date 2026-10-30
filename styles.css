@@ -181,3 +181,20 @@ nav.tabs a{white-space:nowrap}
 /* Recogida: al buscar, los proveedores con resultados se muestran abiertos */
 .buscando .sec.closed .items{display:grid}
 .buscando .sec.closed .car{transform:none}
+
+/* ---------- v3: proveedores como tarjetas con "Siguiente" ---------- */
+#lista1,#lista2{display:grid;gap:10px}
+.sec{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);gap:0;overflow:hidden}
+.sec.completo{border-color:var(--ok)}
+.sec-h{padding:0}
+.sec-h .tog{padding:12px 14px}
+.tt{display:grid;gap:2px;min-width:0}
+.sec-h .name{font-size:1.1rem}
+.sec-h .cnt{font-size:.85rem}
+.sec.completo .cnt{color:var(--ok);font-weight:700}
+.sec .items{padding:0 10px 10px}
+.sec .item,.sec .prod{box-shadow:none}
+.sec-f{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--line);background:var(--surface-2)}
+.sec.closed .sec-f{display:none}
+.sec-f .allok{min-height:42px;padding:0 14px;border-radius:999px;font-size:.9rem}
+.sig{margin-left:auto;min-height:42px;padding:0 18px;border-radius:999px;border:0;background:var(--fg);color:var(--bg);font-weight:700;white-space:nowrap}

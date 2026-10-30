@@ -90,11 +90,9 @@ function buildRecogida() {
   if (!dia) { root.innerHTML = emptyHTML(); return; }
   root.innerHTML = grupos().map(gr => `
     <section class="sec${abiertos1.has(gr.g) ? '' : ' closed'}" data-g="${esc(gr.g)}">
-      <div class="sec-h">
-        <button class="tog" type="button" aria-expanded="${abiertos1.has(gr.g)}"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button>
-        <button class="allok" type="button" data-allok="${esc(gr.g)}">Todo bien</button>
-      </div>
+      <div class="sec-h"><button class="tog" type="button" aria-expanded="${abiertos1.has(gr.g)}"><span class="tt"><span class="name">Proveedor ${esc(gr.g)}</span><span class="cnt"></span></span><span class="car">▾</span></button></div>
       <div class="items">${gr.items.map(itemHTML).join('')}</div>
+      <div class="sec-f"><button class="allok" type="button" data-allok="${esc(gr.g)}">Marcar todo «Tengo»</button><button class="sig" type="button" data-sig="${esc(gr.g)}">Siguiente →</button></div>
     </section>`).join('');
   refreshRecogida();
 }
@@ -144,18 +142,22 @@ function refreshRecogida() {
   document.querySelectorAll('#lista1 .sec').forEach(sec => {
     const its = dia.productos.filter(i => i.g === sec.dataset.g);
     const done = its.filter(est).length;
-    sec.querySelector('.cnt').textContent = done + '/' + its.length;
-    sec.querySelector('.allok').hidden = done === its.length;
+    const comp = done === its.length;
+    sec.querySelector('.cnt').textContent = comp ? `✓ Completo · ${its.length} revisados` : `${done} de ${its.length} revisados`;
+    sec.classList.toggle('completo', comp);
+    sec.querySelector('.allok').hidden = comp;
     sec.hidden = !its.some(i => !document.getElementById('it-' + i.k).hidden);
   });
 }
 const pendRec = {};
 function saveRec(pr, patch) {
   if (!fecha) return;
+  const antes = grupoListo(1, pr.g);
   const next = { ...R(pr), ...patch, codigo: pr.c, nombre: nombre(), ts: new Date().toISOString() };
   const clear = !next.estado && !(next.nota && next.nota.trim());
   if (clear) delete rec[pr.k]; else rec[pr.k] = next;
   refreshAll();
+  if (!antes && grupoListo(1, pr.g)) programarSiguiente(1, pr.g);
   const ref = doc(db, 'dias', fecha, 'recogida', pr.k);
   pendRec[pr.k] = (pendRec[pr.k] || Promise.resolve()).then(() => clear ? deleteDoc(ref) : setDoc(ref, next)).catch(errGuardar);
 }
@@ -164,9 +166,11 @@ const prodByK = k => dia && dia.productos.find(i => i.k === k);
 
 $('#lista1').addEventListener('click', e => {
   const sec = e.target.closest('.sec'); const tog = e.target.closest('.tog');
-  if (tog) { const abierto = sec.classList.toggle('closed') === false; if (abierto) abiertos1.add(sec.dataset.g); else abiertos1.delete(sec.dataset.g); tog.setAttribute('aria-expanded', String(abierto)); return; }
+  if (tog) { setOpen(1, sec.dataset.g, sec.classList.contains('closed')); return; }
   const ok = e.target.closest('[data-allok]');
-  if (ok) { if (needName()) return; dia.productos.filter(i => i.g === ok.dataset.allok && !est(i)).forEach(i => saveRec(i, { estado: 'si' })); toast('Proveedor ' + ok.dataset.allok + ' recogido completo'); return; }
+  if (ok) { if (needName()) return; dia.productos.filter(i => i.g === ok.dataset.allok && !est(i)).forEach(i => saveRec(i, { estado: 'si' })); return; }
+  const sg = e.target.closest('[data-sig]');
+  if (sg) { siguiente(1, sg.dataset.sig, false); return; }
   const el = e.target.closest('.item'); if (!el) return;
   const pr = prodByK(el.dataset.k); if (!pr) return;
   const a = e.target.closest('[data-a]');
@@ -202,8 +206,9 @@ function buildReparto() {
   if (!dia) { root.innerHTML = emptyHTML(); return; }
   root.innerHTML = grupos().map(gr => `
     <section class="sec${abiertos2.has(gr.g) ? '' : ' closed'}" data-g="${esc(gr.g)}">
-      <div class="sec-h"><button class="tog" type="button" aria-expanded="${abiertos2.has(gr.g)}"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button></div>
+      <div class="sec-h"><button class="tog" type="button" aria-expanded="${abiertos2.has(gr.g)}"><span class="tt"><span class="name">Proveedor ${esc(gr.g)}</span><span class="cnt"></span></span><span class="car">▾</span></button></div>
       <div class="items">${gr.items.map(pr => `<article class="prod" id="r-${esc(pr.k)}" data-k="${esc(pr.k)}"></article>`).join('')}</div>
+      <div class="sec-f"><span></span><button class="sig" type="button" data-sig="${esc(gr.g)}">Siguiente →</button></div>
     </section>`).join('');
   Object.keys(cache2).forEach(k => delete cache2[k]);
   refreshReparto();
@@ -254,7 +259,9 @@ function refreshReparto() {
   });
   document.querySelectorAll('#lista2 .sec').forEach(sec => {
     const its = dia.productos.filter(i => i.g === sec.dataset.g);
-    sec.querySelector('.cnt').textContent = its.filter(prodListo).length + '/' + its.length;
+    const done = its.filter(prodListo).length, comp = done === its.length;
+    sec.querySelector('.cnt').textContent = comp ? `✓ Completo · ${its.length} productos separados` : `${done} de ${its.length} productos separados`;
+    sec.classList.toggle('completo', comp);
     sec.hidden = !its.some(i => !document.getElementById('r-' + i.k).hidden);
   });
 }
@@ -265,10 +272,12 @@ $('#lista2').addEventListener('focusout', e => {
 const pendRep = {};
 function saveRep(pr, p, patch) {
   if (!fecha) return;
+  const antes = grupoListo(2, pr.g);
   const cur = rep[pr.k] || { cli: {} };
   const merged = { ...((cur.cli || {})[p] || {}), ...patch };
   rep[pr.k] = { ...cur, cli: { ...(cur.cli || {}), [p]: merged } };
   refreshAll();
+  if (!antes && grupoListo(2, pr.g)) programarSiguiente(2, pr.g);
   const ref = doc(db, 'dias', fecha, 'reparto', pr.k);
   const body = { codigo: pr.c, nombre: nombre(), ts: new Date().toISOString(), cli: { [p]: merged } };
   pendRep[pr.k] = (pendRep[pr.k] || Promise.resolve()).then(() => setDoc(ref, body, { merge: true })).catch(errGuardar);
@@ -276,7 +285,9 @@ function saveRep(pr, p, patch) {
 function ctxRep(e) { const el = e.target.closest('.prod'); const row = e.target.closest('.cli'); if (!el || !row) return null; const pr = prodByK(el.dataset.k); const a = pr && pr.a.find(x => x.p === row.dataset.p); return pr && a ? { pr, a, row } : null; }
 $('#lista2').addEventListener('click', e => {
   const tog = e.target.closest('.tog');
-  if (tog) { const sec = tog.closest('.sec'); const abierto = sec.classList.toggle('closed') === false; if (abierto) abiertos2.add(sec.dataset.g); else abiertos2.delete(sec.dataset.g); tog.setAttribute('aria-expanded', String(abierto)); return; }
+  if (tog) { const sec = tog.closest('.sec'); setOpen(2, sec.dataset.g, sec.classList.contains('closed')); return; }
+  const sg = e.target.closest('[data-sig]');
+  if (sg) { siguiente(2, sg.dataset.sig, false); return; }
   const c = ctxRep(e); if (!c) return;
   if (e.target.closest('.sepb')) {
     if (needName()) return;
@@ -302,6 +313,33 @@ $('#lista2').addEventListener('change', e => {
     saveRep(c.pr, c.a.p, { pesos: vals });
   }
 });
+
+/* ================= proveedores: abrir, cerrar y pasar al siguiente ================= */
+const LISTA = { 1: '#lista1', 2: '#lista2' };
+const abiertosDe = n => n === 1 ? abiertos1 : abiertos2;
+function grupoListo(n, g) { if (!dia) return false; const its = dia.productos.filter(i => i.g === g); return its.length > 0 && its.every(n === 1 ? est : prodListo); }
+function secDe(n, g) { return [...document.querySelectorAll(LISTA[n] + ' .sec')].find(s => s.dataset.g === g); }
+function setOpen(n, g, open) {
+  const sec = secDe(n, g); if (!sec) return;
+  sec.classList.toggle('closed', !open); sec.querySelector('.tog').setAttribute('aria-expanded', String(open));
+  if (open) abiertosDe(n).add(g); else abiertosDe(n).delete(g);
+}
+function irA(n, g) { const sec = secDe(n, g); if (!sec) return; const y = sec.getBoundingClientRect().top + scrollY - $('header').offsetHeight - 10; scrollTo({ top: Math.max(0, y), behavior: 'smooth' }); }
+function siguiente(n, g, auto) {
+  const gs = grupos().map(x => x.g), i = gs.indexOf(g);
+  setOpen(n, g, false);
+  let nx = null;
+  for (let j = 1; j < gs.length; j++) { const c = gs[(i + j) % gs.length]; if (!grupoListo(n, c)) { nx = c; break; } }
+  if (!nx) { irA(n, g); toast(n === 1 ? '✓ Recogida completa. Sigue con 2 Reparto' : '✓ Reparto completo. Revisa el Resumen'); return; }
+  setOpen(n, nx, true); irA(n, nx);
+  if (auto) toast(`✓ Proveedor ${g} completo · sigue ${nx}`);
+}
+const timers = {};
+function programarSiguiente(n, g) {
+  if (busq[n]) return; // con búsqueda activa no movemos la pantalla
+  clearTimeout(timers[n + g]);
+  timers[n + g] = setTimeout(() => { if (grupoListo(n, g) && abiertosDe(n).has(g)) siguiente(n, g, true); }, 700);
+}
 
 /* ================= filtros y búsqueda ================= */
 document.querySelectorAll('.chips').forEach(g => g.addEventListener('click', e => {
