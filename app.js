@@ -1,48 +1,93 @@
-(function(){
-'use strict';
-const $=s=>document.querySelector(s);
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmtQ=n=>Number.isInteger(n)?String(n):String(n).replace('.',',');
-const fmtF=id=>{if(!id)return'';const[y,m,d]=id.split('-');return d+'/'+m+'/'+y};
-const DIAS=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
-const diaF=id=>{const[y,m,d]=id.split('-').map(Number);return DIAS[new Date(y,m-1,d).getDay()]};
-const keyOf=c=>(String(c).replace(/[^A-Za-z0-9_\-.~:@+]/g,'_')||'x');
-function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
-function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import {
+  initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
+  doc, collection, setDoc, deleteDoc, onSnapshot, query, orderBy, limit
+} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { firebaseConfig } from './firebase-config.js?v=4';
+import { pdfLines, tipoDePdf, parseProveedores, parseDiario, cruzar } from './parser.js?v=4';
 
-let fecha=null,lista=null,marcas={};
-let filtro='todos',q='';
+/* ================= utilidades ================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtQ = n => Number.isInteger(n) ? String(n) : String(+n.toFixed(3)).replace('.', ',');
+const fmtKg = n => n.toFixed(3).replace('.', ',') + ' kg';
+const parseKg = s => { if (s == null || String(s).trim() === '') return null; const v = Number(String(s).replace(',', '.')); return isNaN(v) || v < 0 ? NaN : v; };
+const fmtF = id => { if (!id) return ''; const [y, m, d] = id.split('-'); return d + '/' + m + '/' + y; };
+const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const diaF = id => { const [y, m, d] = id.split('-').map(Number); return DIAS[new Date(y, m - 1, d).getDay()]; };
+const hoy = () => new Date().toLocaleDateString('en-CA');
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
 let toastT;
-function toast(t){const el=$('#toast');el.textContent=t;el.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>el.hidden=true,2600)}
+function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => el.hidden = true, 2800); }
 
-/* ---------- vistas ---------- */
-function route(){
-  let v=(location.hash||'#revisar').slice(1);
-  if(!['revisar','resumen','cargar'].includes(v))v='revisar';
-  ['revisar','resumen','cargar'].forEach(n=>{$('#v-'+n).hidden=n!==v;const t=$('#t-'+n);if(n===v)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current')});
-  $('#bar').hidden=v!=='revisar';
-  if(v==='resumen')renderResumen();
-  window.scrollTo(0,0);
+/* ================= Firebase ================= */
+const app = initializeApp(firebaseConfig);
+let db;
+try { db = initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+catch (e) { db = getFirestore(app); }
+const auth = getAuth(app);
+
+/* ================= estado ================= */
+let dias = [], fecha = null, dia = null, rec = {}, rep = {};
+let unsubRec = null, unsubRep = null;
+let cliBy = {};
+const filtro = { 1: 'todos', 2: 'todos' }, busq = { 1: '', 2: '' };
+const nombreEl = $('#nombre');
+nombreEl.value = lsGet('av_nombre') || '';
+nombreEl.addEventListener('input', () => lsSet('av_nombre', nombreEl.value.trim()));
+const nombre = () => nombreEl.value.trim();
+function needName() { if (nombre()) return false; location.hash = location.hash || '#recogida'; nombreEl.focus(); nombreEl.scrollIntoView({ block: 'center' }); toast('Escribe tu nombre antes de marcar'); return true; }
+
+/* ================= vistas ================= */
+const VISTAS = ['recogida', 'reparto', 'resumen', 'cargar'];
+function vista() { const v = (location.hash || '#recogida').slice(1); return VISTAS.includes(v) ? v : 'recogida'; }
+function route() {
+  const v = vista();
+  VISTAS.forEach(n => { $('#v-' + n).hidden = n !== v; const t = $('#t-' + n); if (n === v) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current'); });
+  $('#v-nombre').hidden = !(v === 'recogida' || v === 'reparto');
+  $('#bar').hidden = !(v === 'recogida' || v === 'reparto');
+  if (v === 'resumen') renderResumen();
+  renderStats();
+  window.scrollTo(0, 0);
 }
-addEventListener('hashchange',route);
+addEventListener('hashchange', route);
 
-/* ---------- nombre ---------- */
-const nombreEl=$('#nombre');
-nombreEl.value=lsGet('av_nombre')||'';
-nombreEl.addEventListener('input',()=>lsSet('av_nombre',nombreEl.value.trim()));
+/* ================= cálculo ================= */
+const R = pr => rec[pr.k] || {};
+const est = pr => R(pr).estado || null;
+function disponible(pr) { const r = R(pr); if (!r.estado) return null; if (r.estado === 'si') return pr.q; if (r.estado === 'no') return 0; return r.quedan ?? 0; }
+const cliRep = (pr, p) => ((rep[pr.k] || {}).cli || {})[p] || {};
+const lleva = (pr, a) => { const v = cliRep(pr, a.p).lleva; return v == null ? a.q : v; };
+const sumaLleva = pr => pr.a.reduce((s, a) => s + lleva(pr, a), 0);
+const corto = pr => { const d = disponible(pr); return d != null && d < pr.q; };
+const porDecidir = pr => { const d = disponible(pr); return d != null && sumaLleva(pr) - d > 0.0001; };
+const separado = (pr, p) => !!cliRep(pr, p).ok;
+const prodListo = pr => pr.a.every(a => separado(pr, a.p));
+const isEK = pr => pr.um === 'EK';
+const pesosDe = (pr, p) => (cliRep(pr, p).pesos || []);
+const kgCli = (pr, a) => pesosDe(pr, a.p).slice(0, Math.round(lleva(pr, a))).reduce((s, x) => s + (Number(x) || 0), 0);
+const kgProd = pr => pr.a.reduce((s, a) => s + kgCli(pr, a), 0);
+const piezasPesadas = (pr, a) => pesosDe(pr, a.p).slice(0, Math.round(lleva(pr, a))).filter(x => x != null && x > 0).length;
+const isIssue1 = pr => { const r = R(pr); return r.estado === 'no' || r.estado === 'parcial' || !!(r.nota && r.nota.trim()); };
 
-/* ---------- estado ---------- */
-const est=it=>(marcas[it.k]||{}).estado||null;
-const isIssue=it=>{const m=marcas[it.k]||{};return m.estado==='no'||m.estado==='parcial'||!!(m.nota&&m.nota.trim())};
-function persist(){lsSet('av_marcas_'+fecha,JSON.stringify(marcas))}
+function estadoRecChip(pr) {
+  const s = est(pr), d = disponible(pr);
+  if (!s) return '<span class="chip-st">Sin recoger</span>';
+  if (s === 'si') return '<span class="chip-st ok">Recogido completo</span>';
+  if (s === 'no') return '<span class="chip-st bad">No hay en proveedor</span>';
+  return `<span class="chip-st warn">Recogidos ${fmtQ(d)} de ${fmtQ(pr.q)}</span>`;
+}
 
-/* ---------- construir lista ---------- */
-function buildList(){
-  const root=$('#lista');
-  if(!lista){root.innerHTML='<div class="empty"><h2>No se pudo cargar la lista</h2><p>Revisa la conexión y recarga la página.</p></div>';return}
-  const groups=[];const idx={};
-  lista.items.forEach(it=>{if(!(it.g in idx)){idx[it.g]=groups.length;groups.push({g:it.g,items:[]})}groups[idx[it.g]].items.push(it)});
-  root.innerHTML=groups.map(gr=>`
+/* ================= 1 RECOGIDA ================= */
+function grupos() { const gs = [], idx = {}; dia.productos.forEach(pr => { if (!(pr.g in idx)) { idx[pr.g] = gs.length; gs.push({ g: pr.g, items: [] }); } gs[idx[pr.g]].items.push(pr); }); return gs; }
+function emptyHTML() { return `<div class="empty"><h2>No hay datos de este día</h2><p>Cuando se carguen los PDF del día aparecerán aquí.</p></div>`; }
+
+function buildRecogida() {
+  const root = $('#lista1');
+  if (!dia) { root.innerHTML = emptyHTML(); return; }
+  root.innerHTML = grupos().map(gr => `
     <section class="sec" data-g="${esc(gr.g)}">
       <div class="sec-h">
         <button class="tog" type="button" aria-expanded="true"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button>
@@ -50,268 +95,411 @@ function buildList(){
       </div>
       <div class="items">${gr.items.map(itemHTML).join('')}</div>
     </section>`).join('');
-  refreshAll();
+  refreshRecogida();
 }
-function itemHTML(it){
-  return `<article class="item" id="it-${esc(it.k)}" data-k="${esc(it.k)}">
-    <div class="row1"><span class="code">${esc(it.c)}</span><span class="qty"><b>${fmtQ(it.q)}</b> uds</span></div>
-    <p class="desc">${esc(it.d)}</p>
+function itemHTML(pr) {
+  return `<article class="item" id="it-${esc(pr.k)}" data-k="${esc(pr.k)}">
+    <div class="row1"><span class="code">${esc(pr.c)}</span><span class="qty"><b>${fmtQ(pr.q)}</b> ${isEK(pr) ? '<span class="um ek">EK · piezas</span>' : 'uds'}</span></div>
+    <p class="desc">${esc(pr.d)}</p>
     <div class="acts">
       <button type="button" class="b-si" data-a="si" aria-pressed="false">Tengo</button>
       <button type="button" class="b-parcial" data-a="parcial" aria-pressed="false">Faltan algunas</button>
       <button type="button" class="b-no" data-a="no" aria-pressed="false">No hay</button>
     </div>
     <div class="extra">
-      <div class="quedan" hidden>Quedan
-        <span class="step"><button type="button" data-st="-1" aria-label="Menos">−</button><input id="q-${esc(it.k)}" type="number" inputmode="decimal" min="0" max="${it.q}" step="1" aria-label="Unidades que quedan"><button type="button" data-st="1" aria-label="Más">+</button></span>
-        de ${fmtQ(it.q)}
+      <div class="quedan" hidden>Hay
+        <span class="step"><button type="button" data-st="-1" aria-label="Menos">−</button><input id="q-${esc(pr.k)}" type="number" inputmode="decimal" min="0" max="${pr.q}" step="1" aria-label="Unidades que hay"><button type="button" data-st="1" aria-label="Más">+</button></span>
+        de ${fmtQ(pr.q)}
       </div>
-      <div class="nota" hidden><input id="n-${esc(it.k)}" type="text" placeholder="Anotación / incidencia" aria-label="Anotación"></div>
+      <div class="nota" hidden><input id="n-${esc(pr.k)}" type="text" placeholder="Anotación / incidencia" aria-label="Anotación"></div>
     </div>
     <button type="button" class="add-nota">+ Añadir nota</button>
+    <span class="who" hidden></span>
   </article>`;
 }
-function refreshItem(it){
-  const el=document.getElementById('it-'+it.k);if(!el)return;
-  const m=marcas[it.k]||{};const s=m.estado||null;
-  el.classList.toggle('st-si',s==='si');el.classList.toggle('st-parcial',s==='parcial');el.classList.toggle('st-no',s==='no');
-  el.querySelectorAll('.acts button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.a===s)));
-  const qd=el.querySelector('.quedan'),qi=qd.querySelector('input');
-  qd.hidden=s!=='parcial';
-  if(document.activeElement!==qi)qi.value=m.quedan==null?'':m.quedan;
-  const nd=el.querySelector('.nota'),ni=nd.querySelector('input');
-  const showNota=s==='no'||s==='parcial'||!!m.nota||el.dataset.notaOpen==='1';
-  nd.hidden=!showNota;el.querySelector('.add-nota').hidden=showNota;
-  if(document.activeElement!==ni)ni.value=m.nota||'';
-  const qs=q.toLowerCase();
-  const matchQ=!qs||it.c.toLowerCase().includes(qs)||it.d.toLowerCase().includes(qs);
-  const matchF=filtro==='todos'||(filtro==='pend'&&!s)||(filtro==='falt'&&isIssue(it));
-  el.hidden=!(matchQ&&matchF);
+function refreshItem(pr) {
+  const el = document.getElementById('it-' + pr.k); if (!el) return;
+  const m = R(pr), s = m.estado || null;
+  el.classList.toggle('st-si', s === 'si'); el.classList.toggle('st-parcial', s === 'parcial'); el.classList.toggle('st-no', s === 'no');
+  el.querySelectorAll('.acts button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.a === s)));
+  const qd = el.querySelector('.quedan'), qi = qd.querySelector('input');
+  qd.hidden = s !== 'parcial';
+  if (document.activeElement !== qi) qi.value = m.quedan == null ? '' : m.quedan;
+  const nd = el.querySelector('.nota'), ni = nd.querySelector('input');
+  const show = s === 'no' || s === 'parcial' || !!m.nota || el.dataset.notaOpen === '1';
+  nd.hidden = !show; el.querySelector('.add-nota').hidden = show;
+  if (document.activeElement !== ni) ni.value = m.nota || '';
+  const who = el.querySelector('.who');
+  if (s && m.nombre) { who.hidden = false; who.textContent = 'Marcado por ' + m.nombre + (m.ts ? ' · ' + new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''); } else who.hidden = true;
+  const q = busq[1].toLowerCase();
+  const okQ = !q || pr.c.toLowerCase().includes(q) || pr.d.toLowerCase().includes(q);
+  const f = filtro[1];
+  const okF = f === 'todos' || (f === 'pend' && !s) || (f === 'falt' && isIssue1(pr));
+  el.hidden = !(okQ && okF);
 }
-function refreshAll(){
-  if(!lista){renderStats();return}
-  lista.items.forEach(refreshItem);
-  document.querySelectorAll('.sec').forEach(sec=>{
-    const its=lista.items.filter(i=>i.g===sec.dataset.g);
-    const done=its.filter(est).length;
-    sec.querySelector('.cnt').textContent=done+'/'+its.length;
-    sec.querySelector('.allok').hidden=done===its.length;
-    sec.hidden=!its.some(i=>!document.getElementById('it-'+i.k).hidden);
+function refreshRecogida() {
+  if (!dia) return;
+  dia.productos.forEach(refreshItem);
+  document.querySelectorAll('#lista1 .sec').forEach(sec => {
+    const its = dia.productos.filter(i => i.g === sec.dataset.g);
+    const done = its.filter(est).length;
+    sec.querySelector('.cnt').textContent = done + '/' + its.length;
+    sec.querySelector('.allok').hidden = done === its.length;
+    sec.hidden = !its.some(i => !document.getElementById('it-' + i.k).hidden);
   });
-  renderStats();
-  if(!$('#v-resumen').hidden)renderResumen();
 }
-function counts(){
-  const c={si:0,parcial:0,no:0,pend:0,total:lista?lista.items.length:0};
-  if(lista)lista.items.forEach(i=>{const s=est(i);if(s)c[s]++;else c.pend++});
-  return c;
+const pendRec = {};
+function saveRec(pr, patch) {
+  if (!fecha) return;
+  const next = { ...R(pr), ...patch, codigo: pr.c, nombre: nombre(), ts: new Date().toISOString() };
+  const clear = !next.estado && !(next.nota && next.nota.trim());
+  if (clear) delete rec[pr.k]; else rec[pr.k] = next;
+  refreshAll();
+  const ref = doc(db, 'dias', fecha, 'recogida', pr.k);
+  pendRec[pr.k] = (pendRec[pr.k] || Promise.resolve()).then(() => clear ? deleteDoc(ref) : setDoc(ref, next)).catch(errGuardar);
 }
-function renderStats(){
-  const st=$('#stats');
-  if(!lista){st.innerHTML='<span>Sin lista para mostrar</span>';$('#pbar').style.width='0';return}
-  const c=counts();const rev=c.total-c.pend;
-  $('#pbar').style.width=(c.total?rev/c.total*100:0)+'%';
-  st.innerHTML=`<span><b>${rev}</b> de ${c.total} revisados</span><span class="s-si"><b>${c.si}</b> tengo</span><span class="s-par"><b>${c.parcial}</b> faltan algunas</span><span class="s-no"><b>${c.no}</b> no hay</span>`;
-  const n=lista.items.filter(isIssue).length;
-  $('#bar-btn').textContent=n?`Resumen y envío · ${n} con faltas`:'Resumen y envío';
-}
+function errGuardar(e) { console.error(e); toast(e && e.code === 'permission-denied' ? 'Sin permiso para guardar' : 'No se guardó. Revisa la conexión'); }
+const prodByK = k => dia && dia.productos.find(i => i.k === k);
 
-/* ---------- guardar marcas (en este teléfono) ---------- */
-function needName(){if(nombreEl.value.trim())return false;nombreEl.focus();toast('Escribe tu nombre antes de marcar');return true}
-function save(it,patch){
-  const next={...(marcas[it.k]||{}),...patch,ts:new Date().toISOString()};
-  if(!next.estado&&!(next.nota&&next.nota.trim()))delete marcas[it.k];else marcas[it.k]=next;
-  persist();refreshAll();
-}
-const itemByK=k=>lista&&lista.items.find(i=>i.k===k);
-
-$('#lista').addEventListener('click',e=>{
-  const sec=e.target.closest('.sec');
-  const tog=e.target.closest('.tog');
-  if(tog){sec.classList.toggle('closed');tog.setAttribute('aria-expanded',String(!sec.classList.contains('closed')));return}
-  const ok=e.target.closest('[data-allok]');
-  if(ok){if(needName())return;lista.items.filter(i=>i.g===ok.dataset.allok&&!est(i)).forEach(i=>save(i,{estado:'si'}));toast('Proveedor '+ok.dataset.allok+' marcado como completo');return}
-  const el=e.target.closest('.item');if(!el)return;
-  const it=itemByK(el.dataset.k);if(!it)return;
-  const a=e.target.closest('[data-a]');
-  if(a){if(needName())return;
-    const nv=est(it)===a.dataset.a?null:a.dataset.a;
-    const patch={estado:nv};
-    if(nv!=='parcial')patch.quedan=null;
-    else if((marcas[it.k]||{}).quedan==null)patch.quedan=Math.max(0,Math.floor(it.q)-1);
-    save(it,patch);
-    if(nv==='parcial')setTimeout(()=>{const i=el.querySelector('.quedan input');if(i){i.focus();i.select()}},50);
-    return}
-  const st=e.target.closest('[data-st]');
-  if(st){const m=marcas[it.k]||{};let v=Number(m.quedan??0)+Number(st.dataset.st);v=Math.min(Math.max(0,v),it.q);if(v>=it.q){save(it,{estado:'si',quedan:null});return}save(it,{quedan:v});return}
-  if(e.target.closest('.add-nota')){el.dataset.notaOpen='1';refreshItem(it);el.querySelector('.nota input').focus()}
-});
-$('#lista').addEventListener('change',e=>{
-  const el=e.target.closest('.item');if(!el)return;const it=itemByK(el.dataset.k);if(!it)return;
-  if(e.target.matches('.quedan input')){
-    const v=e.target.value===''?null:Number(e.target.value);
-    if(v!=null&&(isNaN(v)||v<0)){toast('Escribe un número de 0 a '+fmtQ(it.q));refreshItem(it);return}
-    if(v!=null&&v>=it.q){save(it,{estado:'si',quedan:null});return}
-    save(it,{quedan:v});
+$('#lista1').addEventListener('click', e => {
+  const sec = e.target.closest('.sec'); const tog = e.target.closest('.tog');
+  if (tog) { sec.classList.toggle('closed'); tog.setAttribute('aria-expanded', String(!sec.classList.contains('closed'))); return; }
+  const ok = e.target.closest('[data-allok]');
+  if (ok) { if (needName()) return; dia.productos.filter(i => i.g === ok.dataset.allok && !est(i)).forEach(i => saveRec(i, { estado: 'si' })); toast('Proveedor ' + ok.dataset.allok + ' recogido completo'); return; }
+  const el = e.target.closest('.item'); if (!el) return;
+  const pr = prodByK(el.dataset.k); if (!pr) return;
+  const a = e.target.closest('[data-a]');
+  if (a) {
+    if (needName()) return;
+    const nv = est(pr) === a.dataset.a ? null : a.dataset.a;
+    const patch = { estado: nv };
+    if (nv !== 'parcial') patch.quedan = null; else if (R(pr).quedan == null) patch.quedan = Math.max(0, Math.floor(pr.q) - 1);
+    saveRec(pr, patch);
+    if (nv === 'parcial') setTimeout(() => { const i = el.querySelector('.quedan input'); if (i) { i.focus(); i.select(); } }, 50);
+    return;
   }
-  if(e.target.matches('.nota input')){if(needName())return;save(it,{nota:e.target.value.trim()})}
+  const st = e.target.closest('[data-st]');
+  if (st) { let v = Number(R(pr).quedan ?? 0) + Number(st.dataset.st); v = Math.min(Math.max(0, v), pr.q); if (v >= pr.q) { saveRec(pr, { estado: 'si', quedan: null }); return; } saveRec(pr, { quedan: v }); return; }
+  if (e.target.closest('.add-nota')) { el.dataset.notaOpen = '1'; refreshItem(pr); el.querySelector('.nota input').focus(); }
 });
-$('#buscar').addEventListener('input',e=>{q=e.target.value.trim();refreshAll()});
-document.querySelectorAll('.chip').forEach(b=>b.addEventListener('click',()=>{filtro=b.dataset.f;document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));refreshAll()}));
+$('#lista1').addEventListener('change', e => {
+  const el = e.target.closest('.item'); if (!el) return; const pr = prodByK(el.dataset.k); if (!pr) return;
+  if (e.target.matches('.quedan input')) {
+    const v = e.target.value === '' ? null : Number(e.target.value);
+    if (v != null && (isNaN(v) || v < 0)) { toast('Escribe un número de 0 a ' + fmtQ(pr.q)); refreshItem(pr); return; }
+    if (v != null && v >= pr.q) { saveRec(pr, { estado: 'si', quedan: null }); return; }
+    saveRec(pr, { quedan: v });
+  }
+  if (e.target.matches('.nota input')) { if (needName()) return; saveRec(pr, { nota: e.target.value.trim() }); }
+});
 
-/* ---------- resumen + WhatsApp ---------- */
-function buildMsg(){
-  if(!lista)return'';
-  const c=counts();
-  let out=`FALTANTES · ANTONIO VIÑA · ${fmtF(fecha)}\nRevisó: ${nombreEl.value.trim()||'Sin indicar'}\nRevisados ${c.total-c.pend}/${c.total} · Pendientes ${c.pend}\n`;
-  const iss=lista.items.filter(isIssue);
-  if(!iss.length)return out+'\nSin faltantes.';
-  let g=null;
-  iss.forEach(it=>{
-    const m=marcas[it.k]||{};
-    if(it.g!==g){g=it.g;out+=`\n${g}\n`}
-    let l=`• ${it.c} ${it.d} — pedido ${fmtQ(it.q)}`;
-    if(m.estado==='no')l+=' · NO HAY';
-    else if(m.estado==='parcial'&&m.quedan!=null)l+=` · quedan ${fmtQ(m.quedan)} · faltan ${fmtQ(Math.max(0,it.q-m.quedan))}`;
-    if(m.nota)l+=`\n   Nota: ${m.nota}`;
-    out+=l+'\n';
+/* ================= 2 REPARTO ================= */
+const cache2 = {};
+function buildReparto() {
+  const root = $('#lista2');
+  if (!dia) { root.innerHTML = emptyHTML(); return; }
+  root.innerHTML = grupos().map(gr => `
+    <section class="sec" data-g="${esc(gr.g)}">
+      <div class="sec-h"><button class="tog" type="button" aria-expanded="true"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button></div>
+      <div class="items">${gr.items.map(pr => `<article class="prod" id="r-${esc(pr.k)}" data-k="${esc(pr.k)}"></article>`).join('')}</div>
+    </section>`).join('');
+  Object.keys(cache2).forEach(k => delete cache2[k]);
+  refreshReparto();
+}
+function prodHTML(pr) {
+  const d = disponible(pr), sum = sumaLleva(pr), ek = isEK(pr);
+  let alerta = '';
+  if (corto(pr)) {
+    const sobra = sum - d;
+    alerta = sobra > 0.0001
+      ? `<div class="alerta-box">Solo hay ${fmtQ(d)} de ${fmtQ(pr.q)}. Decide a quién le falta: quita ${fmtQ(sobra)} en «Lleva».</div>`
+      : `<div class="alerta-box okb">Faltante repartido: ${fmtQ(d)} de ${fmtQ(pr.q)} asignados.</div>`;
+  }
+  const rows = pr.a.map(a => {
+    const cl = cliBy[a.p] || { nombre: 'Pedido ' + a.p, n: '' };
+    const lv = lleva(pr, a), ok = separado(pr, a.p);
+    let row2 = '';
+    if (corto(pr)) row2 += `<span class="small">Lleva</span><span class="step sm"><button type="button" data-lv="-1" aria-label="Menos">−</button><input class="lleva" type="number" inputmode="numeric" min="0" max="${a.q}" step="1" value="${lv}" aria-label="Lleva"><button type="button" data-lv="1" aria-label="Más">+</button></span><span class="small">de ${fmtQ(a.q)}</span>`;
+    if (ek && lv > 0) {
+      const ps = pesosDe(pr, a.p); const n = Math.round(lv);
+      row2 += `<div class="pesos">${Array.from({ length: n }, (_, i) => `<input class="peso" data-i="${i}" type="text" inputmode="decimal" placeholder="kg ${i + 1}" value="${ps[i] != null ? String(ps[i]).replace('.', ',') : ''}" aria-label="Peso pieza ${i + 1}">`).join('')}<span class="kg">= ${fmtKg(kgCli(pr, a))}</span></div>`;
+    }
+    return `<div class="cli${ok ? ' sep' : ''}" data-p="${esc(a.p)}">
+      <div class="cn">${esc(cl.nombre)}<small>Pedido ${esc(a.p)} · ${fmtQ(a.q)} ${ek ? 'pzs' : 'uds'}${lv !== a.q ? ` · lleva ${fmtQ(lv)}` : ''}</small></div>
+      <button type="button" class="sepb" aria-pressed="${ok}">${ok ? '✓ Separado' : 'Separar'}</button>
+      ${row2 ? `<div class="row2">${row2}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="row1"><span class="code">${esc(pr.c)}</span><span class="qty"><b>${fmtQ(pr.q)}</b> ${ek ? '<span class="um ek">EK · piezas</span>' : 'uds'}</span></div>
+    <p class="desc">${esc(pr.d)}</p>
+    <div class="meta">${estadoRecChip(pr)}${ek ? `<span class="chip-st">${fmtKg(kgProd(pr))} en total</span>` : ''}<span class="chip-st">${pr.a.length} cliente${pr.a.length === 1 ? '' : 's'}</span></div>
+    ${alerta}<div class="clis">${rows}</div>`;
+}
+function refreshReparto() {
+  if (!dia) return;
+  const q = busq[2].toLowerCase(), f = filtro[2];
+  dia.productos.forEach(pr => {
+    const el = document.getElementById('r-' + pr.k); if (!el) return;
+    const html = prodHTML(pr);
+    if (cache2[pr.k] !== html) {
+      if (el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') el.dataset.dirty = '1';
+      else { el.innerHTML = html; cache2[pr.k] = html; el.dataset.dirty = ''; }
+    }
+    el.classList.toggle('done', prodListo(pr)); el.classList.toggle('alerta', porDecidir(pr));
+    const okQ = !q || pr.c.toLowerCase().includes(q) || pr.d.toLowerCase().includes(q) || pr.a.some(a => ((cliBy[a.p] || {}).nombre || '').toLowerCase().includes(q));
+    const okF = f === 'todos' || (f === 'pend' && !prodListo(pr)) || (f === 'falt' && corto(pr)) || (f === 'ek' && isEK(pr));
+    el.hidden = !(okQ && okF);
   });
-  return out.trim();
+  document.querySelectorAll('#lista2 .sec').forEach(sec => {
+    const its = dia.productos.filter(i => i.g === sec.dataset.g);
+    sec.querySelector('.cnt').textContent = its.filter(prodListo).length + '/' + its.length;
+    sec.hidden = !its.some(i => !document.getElementById('r-' + i.k).hidden);
+  });
 }
-function renderResumen(){
-  if(!lista)return;
-  const c=counts();
-  $('#sumgrid').innerHTML=`<div><b>${c.total-c.pend}</b><span>Revisados</span></div><div class="g-si"><b>${c.si}</b><span>Tengo</span></div><div class="g-par"><b>${c.parcial}</b><span>Faltan alg.</span></div><div class="g-no"><b>${c.no}</b><span>No hay</span></div>`;
-  $('#sumwho').textContent=c.pend?c.pend+' artículos sin revisar.':'Lista completa.';
-  const iss=lista.items.filter(isIssue);
-  if(!iss.length){$('#issues').innerHTML='<span class="lbl">Faltantes</span><p class="hint" style="margin:0">No hay faltantes marcados.</p>'}
-  else{
-    let h='<span class="lbl">Faltantes por proveedor</span>',g=null,open=false;
-    iss.forEach(it=>{const m=marcas[it.k]||{};
-      if(it.g!==g){if(open)h+='</ul>';g=it.g;h+=`<h3>${esc(g)}</h3><ul>`;open=true}
-      const st=m.estado==='no'?'<span class="no">No hay</span>':m.estado==='parcial'?`<span class="par">Quedan ${fmtQ(m.quedan??0)} · faltan ${fmtQ(Math.max(0,it.q-(m.quedan??0)))}</span>`:'Con nota';
-      h+=`<li><span class="t">${esc(it.d)}</span><span class="m">${esc(it.c)} · pedido ${fmtQ(it.q)} · ${st}</span>${m.nota?`<span class="m">Nota: ${esc(m.nota)}</span>`:''}</li>`});
-    $('#issues').innerHTML=h+'</ul>';
+$('#lista2').addEventListener('focusout', e => {
+  const el = e.target.closest('.prod');
+  setTimeout(() => { if (el && el.dataset.dirty === '1' && !el.contains(document.activeElement)) refreshReparto(); }, 0);
+});
+const pendRep = {};
+function saveRep(pr, p, patch) {
+  if (!fecha) return;
+  const cur = rep[pr.k] || { cli: {} };
+  const merged = { ...((cur.cli || {})[p] || {}), ...patch };
+  rep[pr.k] = { ...cur, cli: { ...(cur.cli || {}), [p]: merged } };
+  refreshAll();
+  const ref = doc(db, 'dias', fecha, 'reparto', pr.k);
+  const body = { codigo: pr.c, nombre: nombre(), ts: new Date().toISOString(), cli: { [p]: merged } };
+  pendRep[pr.k] = (pendRep[pr.k] || Promise.resolve()).then(() => setDoc(ref, body, { merge: true })).catch(errGuardar);
+}
+function ctxRep(e) { const el = e.target.closest('.prod'); const row = e.target.closest('.cli'); if (!el || !row) return null; const pr = prodByK(el.dataset.k); const a = pr && pr.a.find(x => x.p === row.dataset.p); return pr && a ? { pr, a, row } : null; }
+$('#lista2').addEventListener('click', e => {
+  const tog = e.target.closest('.tog');
+  if (tog) { const sec = tog.closest('.sec'); sec.classList.toggle('closed'); tog.setAttribute('aria-expanded', String(!sec.classList.contains('closed'))); return; }
+  const c = ctxRep(e); if (!c) return;
+  if (e.target.closest('.sepb')) {
+    if (needName()) return;
+    const ok = !separado(c.pr, c.a.p);
+    if (ok && isEK(c.pr) && piezasPesadas(c.pr, c.a) < Math.round(lleva(c.pr, c.a))) toast('Ojo: faltan pesos por escribir');
+    saveRep(c.pr, c.a.p, { ok }); return;
   }
-  const msg=buildMsg();$('#msg').textContent=msg;
-  $('#wa').href='https://wa.me/?text='+encodeURIComponent(msg);
-}
-$('#copiar').addEventListener('click',()=>{
-  const t=buildMsg();
-  const sel=()=>{const r=document.createRange();r.selectNodeContents($('#msg'));const s=getSelection();s.removeAllRanges();s.addRange(r);toast('Texto seleccionado: cópialo')};
-  try{navigator.clipboard.writeText(t).then(()=>toast('Texto copiado'),sel)}catch(e){sel()}
+  const b = e.target.closest('[data-lv]');
+  if (b) { if (needName()) return; let v = lleva(c.pr, c.a) + Number(b.dataset.lv); v = Math.min(Math.max(0, v), c.a.q); saveRep(c.pr, c.a.p, { lleva: v }); }
+});
+$('#lista2').addEventListener('change', e => {
+  const c = ctxRep(e); if (!c) return;
+  if (e.target.matches('.lleva')) {
+    if (needName()) return;
+    let v = Number(e.target.value); if (isNaN(v) || v < 0) v = 0; v = Math.min(v, c.a.q);
+    saveRep(c.pr, c.a.p, { lleva: v });
+  }
+  if (e.target.matches('.peso')) {
+    if (needName()) return;
+    const vals = [...c.row.querySelectorAll('.peso')].map(i => parseKg(i.value));
+    if (vals.some(v => Number.isNaN(v))) { toast('Escribe el peso en kg, por ejemplo 2,350'); return; }
+    if (vals.some(v => v != null && v > 50)) toast('Revisa el peso: parece muy alto');
+    saveRep(c.pr, c.a.p, { pesos: vals });
+  }
 });
 
-/* ---------- aplicar una lista ---------- */
-let oficial=null;
-function aplicarLista(data,esLocal){
-  fecha=data.fecha;
-  const seen={};
-  lista={items:(data.items||[]).map(i=>{let k=keyOf(i.c);if(seen[k]){seen[k]++;k+='~'+seen[k]}else seen[k]=1;return{g:i.g,c:String(i.c),q:Number(i.q),d:i.d,k}})};
-  const mk='av_marcas_'+(esLocal?'local_':'')+fecha;
-  persist=()=>lsSet(mk,JSON.stringify(marcas));
-  try{marcas=JSON.parse(lsGet(mk)||'{}')||{}}catch(e){marcas={}}
-  $('#fecha').innerHTML=`<option>${diaF(fecha)} ${fmtF(fecha)} · ${lista.items.length} artículos${esLocal?' (cargada aquí)':''}</option>`;
-  document.title='Control de existencias · '+fmtF(fecha);
-  const bn=$('#local-banner');
-  if(esLocal){bn.hidden=false;bn.innerHTML=`Estás usando una lista cargada en este teléfono (${esc(data.origen||'archivo')}). <button type="button" class="add-nota" id="volver">Volver a la lista oficial</button>`;$('#volver').addEventListener('click',()=>{try{localStorage.removeItem('av_lista_local')}catch(e){}if(oficial)aplicarLista(oficial,false);else location.reload()})}
-  else bn.hidden=true;
-  buildList();
+/* ================= filtros y búsqueda ================= */
+document.querySelectorAll('.chips').forEach(g => g.addEventListener('click', e => {
+  const b = e.target.closest('.chip'); if (!b) return; const n = g.dataset.for;
+  filtro[n] = b.dataset.f; g.querySelectorAll('.chip').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  n === '1' ? refreshRecogida() : refreshReparto();
+}));
+$('#buscar1').addEventListener('input', e => { busq[1] = e.target.value.trim(); refreshRecogida(); });
+$('#buscar2').addEventListener('input', e => { busq[2] = e.target.value.trim(); refreshReparto(); });
+
+/* ================= cabecera ================= */
+function renderStats() {
+  const st = $('#stats');
+  if (!dia) { st.innerHTML = '<span>Sin datos para este día</span>'; $('#pbar').style.width = '0'; return; }
+  const P = dia.productos, tot = P.length, rev = P.filter(est).length;
+  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
+  const falt = P.filter(isIssue1).length, dec = P.filter(porDecidir).length;
+  if (vista() === 'reparto') {
+    $('#pbar').style.width = (lineas ? sep / lineas * 100 : 0) + '%';
+    st.innerHTML = `<span><b>${sep}</b> de ${lineas} separados</span><span class="s-no"><b>${dec}</b> por decidir</span><span><b>${P.filter(isEK).length}</b> EK</span>`;
+  } else {
+    $('#pbar').style.width = (tot ? rev / tot * 100 : 0) + '%';
+    st.innerHTML = `<span><b>${rev}</b> de ${tot} recogidos</span><span class="s-no"><b>${falt}</b> con faltas</span><span><b>${sep}</b>/${lineas} separados</span>`;
+  }
+  $('#bar-btn').textContent = falt ? `Resumen y envío · ${falt} con faltas` : 'Resumen y envío';
 }
 
-/* ---------- cargar lista desde PDF / texto ---------- */
-let parsed=null,origen='Texto pegado';
-$('#c-fecha').value=new Date().toLocaleDateString('en-CA');
-function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('No se pudo cargar el lector de PDF'));document.head.appendChild(s)})}
-async function pdfText(file){
-  if(!window.pdfjsLib){
+/* ================= RESUMEN ================= */
+function datosResumen() {
+  const P = dia.productos;
+  const faltProv = P.filter(isIssue1);
+  const porCli = {};
+  P.forEach(pr => pr.a.forEach(a => {
+    const lv = lleva(pr, a);
+    if (corto(pr) && (lv < a.q || porDecidir(pr))) (porCli[a.p] = porCli[a.p] || []).push({ pr, a, lv, dec: porDecidir(pr) });
+  }));
+  const ek = {};
+  P.filter(isEK).forEach(pr => pr.a.forEach(a => { const lv = lleva(pr, a); if (lv > 0) (ek[a.p] = ek[a.p] || []).push({ pr, a, lv, kg: kgCli(pr, a), pes: piezasPesadas(pr, a) }); }));
+  const nombres = [...new Set([...Object.values(rec), ...Object.values(rep)].map(m => m.nombre).filter(Boolean))];
+  return { faltProv, porCli, ek, nombres };
+}
+const ordenCli = obj => dia.clientes.map(c => c.p).filter(p => obj[p]);
+function renderResumen() {
+  if (!dia) { ['#res-prov', '#res-cli', '#res-ek'].forEach(s => $(s).innerHTML = ''); $('#sumgrid').innerHTML = ''; $('#msg').textContent = ''; return; }
+  const P = dia.productos, D = datosResumen();
+  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
+  $('#sumgrid').innerHTML = `<div><b>${P.filter(est).length}/${P.length}</b><span>Recogidos</span></div><div class="g-no"><b>${D.faltProv.length}</b><span>Faltas prov.</span></div><div><b>${sep}/${lineas}</b><span>Separados</span></div><div class="g-par"><b>${Object.keys(D.porCli).length}</b><span>Clientes afect.</span></div>`;
+  $('#sumwho').textContent = D.nombres.length ? 'Han marcado: ' + D.nombres.join(', ') : 'Todavía nadie ha marcado.';
+  // proveedor
+  if (!D.faltProv.length) $('#res-prov').innerHTML = '<span class="lbl">Faltantes en proveedor</span><p class="hint" style="margin:0">Sin faltantes.</p>';
+  else { let h = '<span class="lbl">Faltantes en proveedor</span>', g = null; D.faltProv.forEach(pr => { const m = R(pr); if (pr.g !== g) { if (g) h += '</ul>'; g = pr.g; h += `<h3>${esc(g)}</h3><ul>`; } const st = m.estado === 'no' ? '<span class="no">No hay</span>' : m.estado === 'parcial' ? `<span class="par">Hay ${fmtQ(m.quedan ?? 0)} · faltan ${fmtQ(pr.q - (m.quedan ?? 0))}</span>` : 'Con nota'; h += `<li><span class="t">${esc(pr.d)}</span><span class="m">${esc(pr.c)} · pedido ${fmtQ(pr.q)} · ${st}</span>${m.nota ? `<span class="m">Nota: ${esc(m.nota)}</span>` : ''}</li>`; }); $('#res-prov').innerHTML = h + '</ul>'; }
+  // clientes
+  const pc = ordenCli(D.porCli);
+  if (!pc.length) $('#res-cli').innerHTML = '<span class="lbl">Clientes con faltas</span><p class="hint" style="margin:0">Ningún cliente afectado.</p>';
+  else $('#res-cli').innerHTML = '<span class="lbl">Clientes con faltas</span><ul>' + pc.map(p => `<li><span class="t">${esc(cliBy[p].nombre)} · ${esc(p)}</span>${D.porCli[p].map(x => `<span class="m">${esc(x.pr.d)} · ${x.dec ? '<span class="no">por decidir</span>' : `<span class="par">lleva ${fmtQ(x.lv)} de ${fmtQ(x.a.q)}</span>`}</span>`).join('')}</li>`).join('') + '</ul>';
+  // EK
+  const pe = ordenCli(D.ek);
+  if (!pe.length) $('#res-ek').innerHTML = '<span class="lbl">Pesos EK por cliente</span><p class="hint" style="margin:0">No hay productos EK.</p>';
+  else $('#res-ek').innerHTML = '<span class="lbl">Pesos EK por cliente</span><ul>' + pe.map(p => { const xs = D.ek[p], tot = xs.reduce((s, x) => s + x.kg, 0); return `<li><span class="t">${esc(cliBy[p].nombre)} · ${esc(p)} — ${fmtKg(tot)}</span>${xs.map(x => `<span class="m">${esc(x.pr.d)} · ${fmtQ(x.lv)} pzs · ${x.pes < Math.round(x.lv) ? `<span class="par">${x.pes}/${Math.round(x.lv)} pesadas</span> · ` : ''}<b>${fmtKg(x.kg)}</b></span>`).join('')}</li>`; }).join('') + '</ul>';
+  const msg = buildMsg(D); $('#msg').textContent = msg; $('#wa').href = 'https://wa.me/?text=' + encodeURIComponent(msg);
+}
+function buildMsg(D) {
+  const P = dia.productos;
+  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
+  let o = `CONTROL · ANTONIO VIÑA · ${fmtF(fecha)}\nMarcaron: ${D.nombres.join(', ') || nombre() || 'Sin indicar'}\nRecogidos ${P.filter(est).length}/${P.length} · Separados ${sep}/${lineas}\n`;
+  if (D.faltProv.length) { o += '\nFALTANTES EN PROVEEDOR'; let g = null; D.faltProv.forEach(pr => { const m = R(pr); if (pr.g !== g) { g = pr.g; o += `\n${g}`; } o += `\n• ${pr.c} ${pr.d} — pedido ${fmtQ(pr.q)}` + (m.estado === 'no' ? ' · NO HAY' : m.estado === 'parcial' ? ` · hay ${fmtQ(m.quedan ?? 0)} · faltan ${fmtQ(pr.q - (m.quedan ?? 0))}` : '') + (m.nota ? `\n   Nota: ${m.nota}` : ''); }); o += '\n'; }
+  else o += '\nSin faltantes en proveedor.\n';
+  const pc = ordenCli(D.porCli);
+  if (pc.length) { o += '\nCLIENTES CON FALTAS'; pc.forEach(p => { o += `\n• ${p} ${cliBy[p].nombre}`; D.porCli[p].forEach(x => { o += `\n   ${x.pr.d}: ` + (x.dec ? 'POR DECIDIR' : `lleva ${fmtQ(x.lv)} de ${fmtQ(x.a.q)}`); }); }); o += '\n'; }
+  const pe = ordenCli(D.ek);
+  const conPeso = pe.filter(p => D.ek[p].some(x => x.pes > 0));
+  if (conPeso.length) { o += '\nPESOS EK'; conPeso.forEach(p => { const xs = D.ek[p].filter(x => x.pes > 0); o += `\n• ${p} ${cliBy[p].nombre} — ${fmtKg(xs.reduce((s, x) => s + x.kg, 0))}`; xs.forEach(x => { o += `\n   ${x.pr.d}: ${fmtQ(x.lv)} pzs = ${fmtKg(x.kg)}` + (x.pes < Math.round(x.lv) ? ` (${x.pes}/${Math.round(x.lv)} pesadas)` : ''); }); }); o += '\n'; }
+  let sinPesar = 0, cliSin = 0;
+  pe.forEach(p => { const n = D.ek[p].reduce((s, x) => s + Math.max(0, Math.round(x.lv) - x.pes), 0); sinPesar += n; if (n) cliSin++; });
+  if (sinPesar) o += `\nEK sin pesar: ${sinPesar} piezas en ${cliSin} cliente${cliSin === 1 ? '' : 's'}.`;
+  return o.trim();
+}
+$('#copiar').addEventListener('click', () => {
+  const t = $('#msg').textContent;
+  const sel = () => { const r = document.createRange(); r.selectNodeContents($('#msg')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Texto seleccionado: cópialo'); };
+  try { navigator.clipboard.writeText(t).then(() => toast('Texto copiado'), sel); } catch (e) { sel(); }
+});
+
+/* ================= refresco general ================= */
+function refreshAll() { refreshRecogida(); refreshReparto(); renderStats(); if (vista() === 'resumen') renderResumen(); }
+
+/* ================= días ================= */
+$('#fecha').addEventListener('change', e => selectFecha(e.target.value));
+function renderFechas() {
+  const s = $('#fecha');
+  if (!dias.length) { s.innerHTML = '<option value="">Sin días cargados</option>'; return; }
+  s.innerHTML = dias.map(d => `<option value="${esc(d.id)}">${diaF(d.id)} ${fmtF(d.id)} · ${d.productos.length} productos · ${d.clientes.length} pedidos</option>`).join('');
+  if (fecha) s.value = fecha;
+}
+function setDia(d) {
+  dia = d ? { ...d, productos: d.productos.map(p => ({ ...p, q: Number(p.q), a: (p.a || []).map(a => ({ ...a, q: Number(a.q) })) })) } : null;
+  cliBy = {}; if (dia) dia.clientes.forEach(c => cliBy[c.p] = c);
+}
+function selectFecha(id) {
+  const d = dias.find(x => x.id === id);
+  const changed = fecha !== id;
+  fecha = d ? id : null; setDia(d);
+  if (d) $('#fecha').value = id;
+  buildRecogida(); buildReparto();
+  if (changed) {
+    rec = {}; rep = {};
+    if (unsubRec) unsubRec(); if (unsubRep) unsubRep();
+    unsubRec = unsubRep = null;
+    if (fecha) {
+      unsubRec = onSnapshot(collection(db, 'dias', fecha, 'recogida'), snap => { const m = {}; snap.forEach(x => m[x.id] = x.data()); rec = m; refreshAll(); }, errConexion);
+      unsubRep = onSnapshot(collection(db, 'dias', fecha, 'reparto'), snap => { const m = {}; snap.forEach(x => m[x.id] = x.data()); rep = m; refreshAll(); }, errConexion);
+    }
+  }
+  refreshAll();
+}
+function errConexion(e) { console.error(e); toast('No se pudo conectar con la base de datos'); }
+onSnapshot(query(collection(db, 'dias'), orderBy('fecha', 'desc'), limit(10)), snap => {
+  dias = snap.docs.map(x => ({ id: x.id, ...x.data() }));
+  renderFechas();
+  if (fecha && dias.some(x => x.id === fecha)) { setDia(dias.find(x => x.id === fecha)); buildRecogida(); buildReparto(); refreshAll(); }
+  else { const t = hoy(); selectFecha(dias.some(x => x.id === t) ? t : (dias[0] && dias[0].id)); }
+}, errConexion);
+
+/* ================= CARGAR (administradora) ================= */
+let usuario = null, pdfProv = null, pdfDiario = null, cruce = null;
+onAuthStateChanged(auth, u => {
+  usuario = u;
+  $('#login-card').hidden = !!u; $('#admin').hidden = !u;
+  if (u) $('#adm-who').textContent = 'Sesión: ' + u.email;
+});
+$('#login').addEventListener('submit', async e => {
+  e.preventDefault(); const btn = $('#l-btn'), err = $('#l-err'); err.hidden = true; btn.disabled = true; btn.textContent = 'Entrando…';
+  try { await signInWithEmailAndPassword(auth, $('#l-email').value.trim(), $('#l-pass').value); $('#l-pass').value = ''; }
+  catch (x) { err.hidden = false; err.textContent = /invalid|wrong|user-not-found/.test(x.code || '') ? 'Correo o contraseña incorrectos.' : x.code === 'auth/too-many-requests' ? 'Demasiados intentos. Espera unos minutos.' : 'No se pudo entrar. Revisa la conexión.'; }
+  btn.disabled = false; btn.textContent = 'Entrar';
+});
+$('#salir').addEventListener('click', () => signOut(auth));
+
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('No se pudo cargar el lector de PDF')); document.head.appendChild(s); }); }
+async function leerPdf(file) {
+  if (!window.pdfjsLib) {
     await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
-    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   }
-  const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
-  const lines=[];
-  for(let p=1;p<=pdf.numPages;p++){
-    const tc=await (await pdf.getPage(p)).getTextContent();
-    const rows={};
-    tc.items.forEach(t=>{if(!t.str)return;const y=Math.round(t.transform[5]/2)*2;(rows[y]=rows[y]||[]).push(t)});
-    Object.keys(rows).map(Number).sort((a,b)=>b-a).forEach(y=>{
-      let s='',end=null;
-      rows[y].sort((a,b)=>a.transform[4]-b.transform[4]).forEach(t=>{const x=t.transform[4];if(end!==null&&x-end>1.5)s+=' ';s+=t.str;end=x+(t.width||0)});
-      lines.push(s);
-    });
-  }
-  return lines.join('\n');
+  return pdfLines(window.pdfjsLib, new Uint8Array(await file.arrayBuffer()));
 }
-function normQ(s){s=String(s);if(s.includes(','))s=s.replace(/\./g,'').replace(',','.');return Number(s)}
-function parseText(txt){
-  const m=txt.match(/const items=(\[[\s\S]*?\]);/);
-  if(m){try{return JSON.parse(m[1]).map(r=>({g:r.group,c:r.code,q:normQ(r.qty),d:r.desc}))}catch(e){}}
-  try{const j=JSON.parse(txt);if(j&&Array.isArray(j.items))return j.items}catch(e){}
-  const out=[];let g='';
-  txt.split(/\r?\n/).forEach(raw=>{
-    if(/[;\t]/.test(raw)){const p=raw.split(/[;\t]/).map(x=>x.trim());
-      if(p.length>=4&&/\d/.test(p[2])&&!isNaN(normQ(p[2]))){out.push({g:p[0],c:p[1],q:normQ(p[2]),d:p.slice(3).join(' ')});return}
-      if(p.length===3&&!isNaN(normQ(p[1]))){out.push({g:g||'SIN PROVEEDOR',c:p[0],q:normQ(p[1]),d:p[2]});return}}
-    const l=raw.replace(/\s+/g,' ').trim();if(!l)return;
-    let r=l.match(/^proveedor[:\s]+(\S+)/i);if(r){g=r[1].toUpperCase();return}
-    r=l.match(/^(\S*\d\S*)\s*[·|-]?\s*(\d{1,5}(?:[.,]\d{1,3})?)\s+(?:unidades?|uds?\.?)?\s*(.+)$/i);
-    if(r&&/[A-Za-z]/.test(r[3])){out.push({g:g||'SIN PROVEEDOR',c:r[1],q:normQ(r[2]),d:r[3].trim()});return}
-    r=l.match(/^(\S*\d\S*)\s+(.+?)\s+(\d{1,5}[.,]\d{1,3})$/);
-    if(r){out.push({g:g||'SIN PROVEEDOR',c:r[1],q:normQ(r[3]),d:r[2].trim()});return}
-    if(/^[A-Z]{2,5}$/.test(l))g=l;
-  });
-  return out;
+async function onFile(file, esperado) {
+  if (!file) return;
+  const box = $(esperado === 'proveedores' ? '#fb-prov' : '#fb-diario');
+  box.querySelector('.st').textContent = 'Leyendo ' + file.name + '…';
+  try {
+    const lines = await leerPdf(file);
+    const tipo = tipoDePdf(lines);
+    if (!tipo) throw new Error('Este PDF no parece ni «Ventas por productos» ni «Diario de ventas»');
+    if (tipo === 'proveedores') { pdfProv = parseProveedores(lines); marcarBox('#fb-prov', `${file.name} · ${pdfProv.productos.length} productos`); }
+    else { pdfDiario = parseDiario(lines); marcarBox('#fb-diario', `${file.name} · ${pdfDiario.pedidos.length} pedidos`); }
+    if (tipo !== esperado) toast('Ese PDF era el otro listado; lo puse en su sitio');
+    if (box.id === 'fb-prov' && tipo !== 'proveedores' && !pdfProv) box.querySelector('.st').textContent = 'Falta este PDF';
+    if (box.id === 'fb-diario' && tipo !== 'diario' && !pdfDiario) box.querySelector('.st').textContent = 'Falta este PDF';
+    verificar();
+  } catch (x) { console.error(x); box.classList.remove('listo'); box.querySelector('.st').textContent = x.message || 'No se pudo leer el PDF'; }
 }
-const limpiar=items=>items.filter(i=>i.c&&Number(i.q)>0).map(i=>({g:String(i.g||'SIN PROVEEDOR').trim(),c:String(i.c).trim(),q:Number(i.q),d:String(i.d||'').replace(/\s+/g,' ').trim()}));
-async function leer(file){
-  const prev=$('#c-prev');prev.hidden=false;prev.innerHTML='<p class="hint" style="margin:0">Leyendo…</p>';verPrev();
-  try{
-    let txt;
-    if(file){origen=file.name;txt=/\.pdf$/i.test(file.name)||file.type==='application/pdf'?await pdfText(file):await file.text();$('#c-text').value=txt.slice(0,20000)}
-    else{origen='Texto pegado';txt=$('#c-text').value}
-    parsed=limpiar(parseText(txt));
-    showPreview();
-  }catch(e){verPrev();toast('No se pudo leer');prev.innerHTML=`<div class="warnbox">${esc(e.message||'No se pudo leer el archivo')}. Prueba a pegar el texto en la casilla de arriba.</div>`}
-}
-function verPrev(){setTimeout(()=>{const el=$('#c-prev');const y=el.getBoundingClientRect().top+scrollY-$('header').offsetHeight-8;scrollTo({top:y,behavior:'smooth'})},60)}
-function showPreview(){
-  const prev=$('#c-prev');verPrev();
-  if(!parsed.length){toast('No encontré artículos');prev.innerHTML='<div class="warnbox">No encontré artículos. Mira el texto leído en la casilla de arriba: cada línea debe tener código, cantidad y descripción. Con un PDF real del día se ajusta el lector a su formato.</div>';return}
-  const f=$('#c-fecha').value;
-  const provs=[...new Set(parsed.map(i=>i.g))];
-  toast(parsed.length+' artículos leídos');
-  prev.innerHTML=`<span class="lbl">Vista previa</span>
-    <p style="margin:0 0 10px"><b>${parsed.length}</b> artículos · ${provs.length} proveedores (${provs.map(esc).join(', ')})</p>
-    <div class="tbl-wrap"><table><thead><tr><th>Prov.</th><th>Código</th><th>Cant.</th><th>Descripción</th></tr></thead><tbody>
-    ${parsed.map(i=>`<tr><td>${esc(i.g)}</td><td class="c">${esc(i.c)}</td><td class="n">${fmtQ(i.q)}</td><td>${esc(i.d)}</td></tr>`).join('')}
-    </tbody></table></div>
-    <div class="btnrow" style="margin-top:10px"><button class="btn" id="c-pub" type="button">Usar esta lista del ${fmtF(f)}</button></div>
-    <p class="hint"><span class="demo-tag">Ensayo</span> Se usará solo en este teléfono. En la versión final este botón dirá «Publicar para todos».</p>`;
-  $('#c-pub').addEventListener('click',()=>{
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(f)){toast('Elige la fecha de la lista');return}
-    const data={fecha:f,origen,items:parsed};
-    lsSet('av_lista_local',JSON.stringify(data));
-    aplicarLista(data,true);
-    parsed=null;$('#c-prev').hidden=true;$('#c-text').value='';$('#c-file').value='';
-    toast('Lista del '+fmtF(f)+' cargada en este teléfono');location.hash='#revisar';
-  });
-}
-$('#c-file').addEventListener('change',e=>{const f=e.target.files[0];if(f)leer(f)});
-$('#c-leer').addEventListener('click',()=>{if(!$('#c-text').value.trim()){toast('Pega el texto de la lista o sube un archivo');$('#c-text').focus();return}leer(null)});
-$('#c-fecha').addEventListener('change',()=>{if(parsed&&parsed.length)showPreview()});
-const drop=$('#drop');
-['dragover','dragenter'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
-['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over')}));
-drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)leer(f)});
+function marcarBox(sel, txt) { const b = $(sel); b.classList.add('listo'); b.querySelector('.st').textContent = '✓ ' + txt; }
+$('#f-prov').addEventListener('change', e => onFile(e.target.files[0], 'proveedores'));
+$('#f-diario').addEventListener('change', e => onFile(e.target.files[0], 'diario'));
 
-/* ---------- arranque ---------- */
+function verificar() {
+  const v = $('#verif');
+  if (!pdfProv || !pdfDiario) { v.hidden = true; return; }
+  cruce = cruzar(pdfProv, pdfDiario);
+  const X = cruce, lineas = X.productos.reduce((s, p) => s + p.a.length, 0), nEK = X.productos.filter(p => p.um === 'EK').length;
+  const existe = dias.some(d => d.id === X.fecha);
+  let h = `<span class="lbl">Comprobación del ${fmtF(X.fecha) || '¿fecha?'}</span>
+    <div class="check"><div><b>${X.productos.length}</b><span>Productos</span></div><div><b>${X.clientes.length}</b><span>Pedidos</span></div><div><b>${lineas}</b><span>Líneas</span></div><div><b>${nEK}</b><span>EK</span></div></div>`;
+  if (X.problemas.length) h += `<div class="alerta-box" style="margin-top:10px">No cuadran ${X.problemas.length} producto(s):<br>${X.problemas.map(p => `${esc(p.c)} ${esc(p.d)}: proveedor ${fmtQ(p.proveedor)} · clientes ${fmtQ(p.clientes)}`).join('<br>')}</div>`;
+  else h += `<div class="okbox" style="margin-top:10px">✓ Cuadra: lo que se recoge en proveedores es igual a lo que se reparte a clientes.</div>`;
+  if (X.fechasDistintas) h += `<div class="warnbox" style="margin-top:10px">Los dos PDF tienen fechas distintas (${fmtF(pdfProv.fecha)} y ${fmtF(pdfDiario.fecha)}). Revisa que sean del mismo día.</div>`;
+  if (!X.fecha) h += `<div class="warnbox" style="margin-top:10px">No encontré la fecha en los PDF.</div>`;
+  if (existe) h += `<div class="warnbox" style="margin-top:10px">Ya hay datos del ${fmtF(X.fecha)}. Si publicas, se reemplaza la lista y se conservan las marcas de los productos que sigan.</div>`;
+  h += `<div class="btnrow" style="margin-top:12px"><button class="btn" id="publicar" type="button" ${X.fecha ? '' : 'disabled'}>${existe ? 'Reemplazar' : 'Publicar'} el día ${fmtF(X.fecha)}${X.problemas.length ? ' de todos modos' : ''}</button></div>`;
+  v.innerHTML = h; v.hidden = false;
+  $('#publicar').addEventListener('click', publicar);
+  v.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+async function publicar() {
+  const b = $('#publicar'); b.disabled = true; b.textContent = 'Publicando…';
+  try {
+    const X = cruce;
+    await setDoc(doc(db, 'dias', X.fecha), {
+      fecha: X.fecha, creada: new Date().toISOString(), por: usuario ? usuario.email : '',
+      productos: X.productos.map(p => ({ g: p.g, c: p.c, q: p.q, d: p.d, k: p.k, um: p.um, a: p.a })),
+      clientes: X.clientes, problemas: X.problemas.length,
+    });
+    toast('Día ' + fmtF(X.fecha) + ' publicado');
+    pdfProv = pdfDiario = cruce = null; $('#verif').hidden = true;
+    ['#fb-prov', '#fb-diario'].forEach(s => { $(s).classList.remove('listo'); }); $('#fb-prov .st').textContent = 'Lo que se recoge en cada proveedor'; $('#fb-diario .st').textContent = 'Lo que lleva cada cliente';
+    $('#f-prov').value = ''; $('#f-diario').value = '';
+    fecha = null; setTimeout(() => selectFecha(X.fecha), 400); location.hash = '#recogida';
+  } catch (x) { console.error(x); b.disabled = false; b.textContent = 'Publicar'; toast(x.code === 'permission-denied' ? 'Tu usuario no tiene permiso para publicar' : 'No se pudo publicar. Inténtalo de nuevo'); }
+}
+
+/* ================= arranque ================= */
 route();
-let local=null;try{local=JSON.parse(lsGet('av_lista_local')||'null')}catch(e){}
-fetch('lista.json?v='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(data=>{
-  oficial=data;
-  if(local&&local.items&&local.items.length)aplicarLista(local,true);else aplicarLista(data,false);
-}).catch(()=>{
-  if(local&&local.items&&local.items.length){aplicarLista(local,true);return}
-  lista=null;$('#fecha').innerHTML='<option>Sin lista</option>';buildList();renderStats();
-});
-})();

@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Solo esta cuenta puede subir/reemplazar los PDF del día.
+    // Cambia el correo por el que creaste en Authentication.
+    function esAdmin() {
+      return request.auth != null && request.auth.token.email == 'TU_CORREO@gmail.com';
+    }
+
+    match /dias/{fecha} {
+      // La lista del día: todos la ven, solo la administradora la publica.
+      allow read: if true;
+      allow write: if esAdmin();
+
+      // Marcas de recogida y reparto: los repartidores marcan sin iniciar sesión,
+      // pero solo dentro de un día que exista.
+      match /{paso}/{producto} {
+        allow read: if paso in ['recogida', 'reparto'];
+        allow write: if paso in ['recogida', 'reparto']
+          && exists(/databases/$(database)/documents/dias/$(fecha));
+      }
+    }
+  }
+}
