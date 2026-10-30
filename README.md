@@ -18,6 +18,8 @@ Enlace: https://yulissalopezc.github.io/control-existencias/
 
 Todos ven lo mismo en tiempo real.
 
+Cada día es una lista nueva: la app abre siempre en el día de hoy (hora de Canarias). Si los PDF de hoy aún no se han subido, muestra «La lista de hoy aún no está cargada» y aparece sola en cuanto se publica. Los días anteriores (hasta 10) se consultan en el selector de día.
+
 ## Archivos
 
 - `index.html`, `styles.css` — interfaz.

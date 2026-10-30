@@ -16,7 +16,8 @@ const parseKg = s => { if (s == null || String(s).trim() === '') return null; co
 const fmtF = id => { if (!id) return ''; const [y, m, d] = id.split('-'); return d + '/' + m + '/' + y; };
 const DIAS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const diaF = id => { const [y, m, d] = id.split('-').map(Number); return DIAS[new Date(y, m - 1, d).getDay()]; };
-const hoy = () => new Date().toLocaleDateString('en-CA');
+// El día cambia según la hora de Canarias, donde trabajan los repartidores.
+const hoy = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Atlantic/Canary' });
 const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { } };
 let toastT;
@@ -82,7 +83,13 @@ function estadoRecChip(pr) {
 
 /* ================= 1 RECOGIDA ================= */
 function grupos() { const gs = [], idx = {}; dia.productos.forEach(pr => { if (!(pr.g in idx)) { idx[pr.g] = gs.length; gs.push({ g: pr.g, items: [] }); } gs[idx[pr.g]].items.push(pr); }); return gs; }
-function emptyHTML() { return `<div class="empty"><h2>No hay datos de este día</h2><p>Cuando se carguen los PDF del día aparecerán aquí.</p></div>`; }
+function emptyHTML() {
+  const ult = dias[0];
+  const verUlt = ult && ult.id !== fechaSel ? `<p><button class="btn ghost" type="button" data-ver="${esc(ult.id)}">Ver el último día cargado (${diaF(ult.id)} ${fmtF(ult.id)})</button></p>` : '';
+  if (fechaSel === hoy()) return `<div class="empty"><h2>La lista de hoy aún no está cargada</h2><p>${diaF(fechaSel)} ${fmtF(fechaSel)}. Cuando se suban los PDF del día aparecerá aquí sola, no hace falta recargar.</p>${verUlt}</div>`;
+  return `<div class="empty"><h2>No hay datos de este día</h2><p>Cuando se carguen los PDF del día aparecerán aquí.</p>${verUlt}</div>`;
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-ver]'); if (b) selectFecha(b.dataset.ver); });
 
 const abiertos1 = new Set(); // proveedores abiertos en Recogida (empiezan cerrados)
 function buildRecogida() {
@@ -353,7 +360,7 @@ $('#buscar2').addEventListener('input', e => { busq[2] = e.target.value.trim(); 
 /* ================= cabecera ================= */
 function renderStats() {
   const st = $('#stats');
-  if (!dia) { st.innerHTML = '<span>Sin datos para este día</span>'; $('#pbar').style.width = '0'; return; }
+  if (!dia) { st.innerHTML = fechaSel === hoy() ? '<span>Esperando la lista de hoy</span>' : '<span>Sin datos para este día</span>'; $('#pbar').style.width = '0'; return; }
   const P = dia.productos, tot = P.length, rev = P.filter(est).length;
   const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
   const falt = P.filter(isIssue1).length, dec = P.filter(porDecidir).length;
@@ -427,22 +434,27 @@ $('#copiar').addEventListener('click', () => {
 function refreshAll() { refreshRecogida(); refreshReparto(); renderStats(); if (vista() === 'resumen') renderResumen(); }
 
 /* ================= días ================= */
+// fechaSel: el día elegido (puede no estar cargado todavía). fecha: el día cargado que se muestra.
+let fechaSel = null, ultimoHoy = hoy();
 $('#fecha').addEventListener('change', e => selectFecha(e.target.value));
 function renderFechas() {
-  const s = $('#fecha');
-  if (!dias.length) { s.innerHTML = '<option value="">Sin días cargados</option>'; return; }
-  s.innerHTML = dias.map(d => `<option value="${esc(d.id)}">${diaF(d.id)} ${fmtF(d.id)} · ${d.productos.length} productos · ${d.clientes.length} pedidos</option>`).join('');
-  if (fecha) s.value = fecha;
+  const s = $('#fecha'), h = hoy();
+  const opts = dias.map(d => `<option value="${esc(d.id)}">${d.id === h ? 'Hoy · ' : ''}${diaF(d.id)} ${fmtF(d.id)} · ${d.productos.length} productos · ${d.clientes.length} pedidos</option>`);
+  if (!dias.some(d => d.id === h)) opts.unshift(`<option value="${h}">Hoy · ${diaF(h)} ${fmtF(h)} · sin cargar</option>`);
+  s.innerHTML = opts.join('');
+  if (fechaSel) s.value = fechaSel;
 }
 function setDia(d) {
   dia = d ? { ...d, productos: d.productos.map(p => ({ ...p, q: Number(p.q), a: (p.a || []).map(a => ({ ...a, q: Number(a.q) })) })) } : null;
   cliBy = {}; if (dia) dia.clientes.forEach(c => cliBy[c.p] = c);
 }
 function selectFecha(id) {
-  const d = dias.find(x => x.id === id);
-  const changed = fecha !== id;
-  fecha = d ? id : null; setDia(d);
-  if (d) $('#fecha').value = id;
+  fechaSel = id || hoy();
+  const d = dias.find(x => x.id === fechaSel);
+  const nueva = d ? fechaSel : null;
+  const changed = fecha !== nueva;
+  fecha = nueva; setDia(d);
+  renderFechas();
   buildRecogida(); buildReparto();
   if (changed) {
     rec = {}; rep = {};
@@ -458,10 +470,16 @@ function selectFecha(id) {
 function errConexion(e) { console.error(e); toast('No se pudo conectar con la base de datos'); }
 onSnapshot(query(collection(db, 'dias'), orderBy('fecha', 'desc'), limit(10)), snap => {
   dias = snap.docs.map(x => ({ id: x.id, ...x.data() }));
-  renderFechas();
-  if (fecha && dias.some(x => x.id === fecha)) { setDia(dias.find(x => x.id === fecha)); buildRecogida(); buildReparto(); refreshAll(); }
-  else { const t = hoy(); selectFecha(dias.some(x => x.id === t) ? t : (dias[0] && dias[0].id)); }
+  if (fecha && fecha === fechaSel && dias.some(x => x.id === fecha)) { setDia(dias.find(x => x.id === fecha)); renderFechas(); buildRecogida(); buildReparto(); refreshAll(); }
+  else selectFecha(fechaSel || hoy()); // al abrir: siempre el día de hoy; si se publica mientras esperan, aparece solo
 }, errConexion);
+// Si la app queda abierta y cambia el día, pasa sola al nuevo día.
+function revisarCambioDeDia() {
+  const h = hoy();
+  if (h !== ultimoHoy) { const estabaEnHoy = fechaSel === ultimoHoy; ultimoHoy = h; if (estabaEnHoy) { selectFecha(h); toast('Nuevo día: ' + diaF(h) + ' ' + fmtF(h)); } else renderFechas(); }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) revisarCambioDeDia(); });
+setInterval(revisarCambioDeDia, 60000);
 
 /* ================= CARGAR (administradora) ================= */
 let usuario = null, pdfProv = null, pdfDiario = null, cruce = null;
@@ -537,7 +555,7 @@ async function publicar() {
     pdfProv = pdfDiario = cruce = null; $('#verif').hidden = true;
     ['#fb-prov', '#fb-diario'].forEach(s => { $(s).classList.remove('listo'); }); $('#fb-prov .st').textContent = 'Lo que se recoge en cada proveedor'; $('#fb-diario .st').textContent = 'Lo que lleva cada cliente';
     $('#f-prov').value = ''; $('#f-diario').value = '';
-    fecha = null; setTimeout(() => selectFecha(X.fecha), 400); location.hash = '#recogida';
+    setTimeout(() => selectFecha(X.fecha), 400); location.hash = '#recogida';
   } catch (x) { console.error(x); b.disabled = false; b.textContent = 'Publicar'; toast(x.code === 'permission-denied' ? 'Tu usuario no tiene permiso para publicar' : 'No se pudo publicar. Inténtalo de nuevo'); }
 }
 
