@@ -196,12 +196,13 @@ $('#lista1').addEventListener('change', e => {
 
 /* ================= 2 REPARTO ================= */
 const cache2 = {};
+const abiertos2 = new Set(); // proveedores abiertos en Reparto (empiezan cerrados)
 function buildReparto() {
   const root = $('#lista2');
   if (!dia) { root.innerHTML = emptyHTML(); return; }
   root.innerHTML = grupos().map(gr => `
-    <section class="sec" data-g="${esc(gr.g)}">
-      <div class="sec-h"><button class="tog" type="button" aria-expanded="true"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button></div>
+    <section class="sec${abiertos2.has(gr.g) ? '' : ' closed'}" data-g="${esc(gr.g)}">
+      <div class="sec-h"><button class="tog" type="button" aria-expanded="${abiertos2.has(gr.g)}"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button></div>
       <div class="items">${gr.items.map(pr => `<article class="prod" id="r-${esc(pr.k)}" data-k="${esc(pr.k)}"></article>`).join('')}</div>
     </section>`).join('');
   Object.keys(cache2).forEach(k => delete cache2[k]);
@@ -275,7 +276,7 @@ function saveRep(pr, p, patch) {
 function ctxRep(e) { const el = e.target.closest('.prod'); const row = e.target.closest('.cli'); if (!el || !row) return null; const pr = prodByK(el.dataset.k); const a = pr && pr.a.find(x => x.p === row.dataset.p); return pr && a ? { pr, a, row } : null; }
 $('#lista2').addEventListener('click', e => {
   const tog = e.target.closest('.tog');
-  if (tog) { const sec = tog.closest('.sec'); sec.classList.toggle('closed'); tog.setAttribute('aria-expanded', String(!sec.classList.contains('closed'))); return; }
+  if (tog) { const sec = tog.closest('.sec'); const abierto = sec.classList.toggle('closed') === false; if (abierto) abiertos2.add(sec.dataset.g); else abiertos2.delete(sec.dataset.g); tog.setAttribute('aria-expanded', String(abierto)); return; }
   const c = ctxRep(e); if (!c) return;
   if (e.target.closest('.sepb')) {
     if (needName()) return;
@@ -309,7 +310,7 @@ document.querySelectorAll('.chips').forEach(g => g.addEventListener('click', e =
   n === '1' ? refreshRecogida() : refreshReparto();
 }));
 $('#buscar1').addEventListener('input', e => { busq[1] = e.target.value.trim(); $('#lista1').classList.toggle('buscando', !!busq[1]); refreshRecogida(); });
-$('#buscar2').addEventListener('input', e => { busq[2] = e.target.value.trim(); refreshReparto(); });
+$('#buscar2').addEventListener('input', e => { busq[2] = e.target.value.trim(); $('#lista2').classList.toggle('buscando', !!busq[2]); refreshReparto(); });
 
 /* ================= cabecera ================= */
 function renderStats() {
