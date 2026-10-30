@@ -84,13 +84,14 @@ function estadoRecChip(pr) {
 function grupos() { const gs = [], idx = {}; dia.productos.forEach(pr => { if (!(pr.g in idx)) { idx[pr.g] = gs.length; gs.push({ g: pr.g, items: [] }); } gs[idx[pr.g]].items.push(pr); }); return gs; }
 function emptyHTML() { return `<div class="empty"><h2>No hay datos de este día</h2><p>Cuando se carguen los PDF del día aparecerán aquí.</p></div>`; }
 
+const abiertos1 = new Set(); // proveedores abiertos en Recogida (empiezan cerrados)
 function buildRecogida() {
   const root = $('#lista1');
   if (!dia) { root.innerHTML = emptyHTML(); return; }
   root.innerHTML = grupos().map(gr => `
-    <section class="sec" data-g="${esc(gr.g)}">
+    <section class="sec${abiertos1.has(gr.g) ? '' : ' closed'}" data-g="${esc(gr.g)}">
       <div class="sec-h">
-        <button class="tog" type="button" aria-expanded="true"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button>
+        <button class="tog" type="button" aria-expanded="${abiertos1.has(gr.g)}"><span class="name">${esc(gr.g)}</span><span class="cnt"></span><span class="car">▾</span></button>
         <button class="allok" type="button" data-allok="${esc(gr.g)}">Todo bien</button>
       </div>
       <div class="items">${gr.items.map(itemHTML).join('')}</div>
@@ -163,7 +164,7 @@ const prodByK = k => dia && dia.productos.find(i => i.k === k);
 
 $('#lista1').addEventListener('click', e => {
   const sec = e.target.closest('.sec'); const tog = e.target.closest('.tog');
-  if (tog) { sec.classList.toggle('closed'); tog.setAttribute('aria-expanded', String(!sec.classList.contains('closed'))); return; }
+  if (tog) { const abierto = sec.classList.toggle('closed') === false; if (abierto) abiertos1.add(sec.dataset.g); else abiertos1.delete(sec.dataset.g); tog.setAttribute('aria-expanded', String(abierto)); return; }
   const ok = e.target.closest('[data-allok]');
   if (ok) { if (needName()) return; dia.productos.filter(i => i.g === ok.dataset.allok && !est(i)).forEach(i => saveRec(i, { estado: 'si' })); toast('Proveedor ' + ok.dataset.allok + ' recogido completo'); return; }
   const el = e.target.closest('.item'); if (!el) return;
@@ -307,7 +308,7 @@ document.querySelectorAll('.chips').forEach(g => g.addEventListener('click', e =
   filtro[n] = b.dataset.f; g.querySelectorAll('.chip').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
   n === '1' ? refreshRecogida() : refreshReparto();
 }));
-$('#buscar1').addEventListener('input', e => { busq[1] = e.target.value.trim(); refreshRecogida(); });
+$('#buscar1').addEventListener('input', e => { busq[1] = e.target.value.trim(); $('#lista1').classList.toggle('buscando', !!busq[1]); refreshRecogida(); });
 $('#buscar2').addEventListener('input', e => { busq[2] = e.target.value.trim(); refreshReparto(); });
 
 /* ================= cabecera ================= */

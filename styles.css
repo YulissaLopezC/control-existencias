@@ -177,3 +177,7 @@ nav.tabs a{white-space:nowrap}
 .small{font-size:.85rem;color:var(--muted)}
 .cliente-res{display:grid;gap:4px;padding:8px 10px;border-radius:8px;background:var(--surface-2)}
 .cliente-res .t{font-weight:700}
+
+/* Recogida: al buscar, los proveedores con resultados se muestran abiertos */
+.buscando .sec.closed .items{display:grid}
+.buscando .sec.closed .car{transform:none}
