@@ -60,7 +60,6 @@ async function main() {
       const msg = await imap.fetchOne(uid, { source: true }, { uid: true });
       const mail = await simpleParser(msg.source);
       const de = mail.from?.value?.[0]?.address || '';
-      if (de.toLowerCase() === USER.toLowerCase()) { await marcar(imap, uid); continue; } // nuestros propios avisos
       const correo = {
         id: mail.messageId || String(uid), de, asunto: mail.subject || '',
         adjuntos: (mail.attachments || []).map(a => ({ nombre: a.filename || 'adjunto.pdf', tipo: a.contentType, contenido: a.content })),
