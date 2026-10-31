@@ -2,14 +2,15 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Solo esta cuenta puede subir/reemplazar los PDF del día.
+    // Solo esta cuenta puede subir/reemplazar los PDF a mano desde la app.
     // Cambia el correo por el que creaste en Authentication.
+    // (La carga automática por correo usa una cuenta de servicio y no pasa por estas reglas.)
     function esAdmin() {
       return request.auth != null && request.auth.token.email == 'TU_CORREO@gmail.com';
     }
 
     match /dias/{fecha} {
-      // La lista del día: todos la ven, solo la administradora la publica.
+      // La lista del día: todos la ven, solo la administradora la publica a mano.
       allow read: if true;
       allow write: if esAdmin();
 
@@ -21,5 +22,11 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/dias/$(fecha));
       }
     }
+
+    // Historial de cargas automáticas: solo lo ve la administradora en la pestaña «Cargar».
+    match /registro/{id} {
+      allow read: if esAdmin();
+    }
+    // bandeja/ y cargas/ son internas del proceso automático: nadie las lee desde la app.
   }
 }

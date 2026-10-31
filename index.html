@@ -6,7 +6,7 @@
 <title>Control de Existencias Viña</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500&display=swap">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 <header>
@@ -99,8 +99,13 @@
       </form>
     </div>
     <div id="admin" hidden style="display:grid;gap:14px">
+      <div class="card" style="display:grid;gap:10px">
+        <div class="row-flex" style="justify-content:space-between"><span class="lbl" style="margin:0">Carga automática por correo</span><button class="add-nota" id="salir" type="button">Cerrar sesión</button></div>
+        <p class="small" style="margin:0">Envía los 2 PDF a <b>existenciascontrolbd@gmail.com</b>. Se revisa cada 10 minutos, se publica solo y se responde por correo con el resultado.</p>
+        <ul class="registro" id="registro"><li class="small">Cargando historial…</li></ul>
+      </div>
       <div class="card" style="display:grid;gap:12px">
-        <div class="row-flex" style="justify-content:space-between"><span class="lbl" style="margin:0">Cargar los PDF del día</span><button class="add-nota" id="salir" type="button">Cerrar sesión</button></div>
+        <span class="lbl" style="margin:0">Carga manual (si falla el correo)</span>
         <p class="small" style="margin:0" id="adm-who"></p>
         <label class="filebox" id="fb-prov">
           <strong>1. Ventas por productos</strong>
@@ -125,6 +130,6 @@
 </div>
 <div class="toast" id="toast" hidden></div>
 
-<script type="module" src="app.js?v=8"></script>
+<script type="module" src="app.js?v=9"></script>
 </body>
 </html>

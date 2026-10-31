@@ -86,7 +86,7 @@ function grupos() { const gs = [], idx = {}; dia.productos.forEach(pr => { if (!
 function emptyHTML() {
   const ult = dias[0];
   const verUlt = ult && ult.id !== fechaSel ? `<p><button class="btn ghost" type="button" data-ver="${esc(ult.id)}">Ver el último día cargado (${diaF(ult.id)} ${fmtF(ult.id)})</button></p>` : '';
-  if (fechaSel === hoy()) return `<div class="empty"><h2>La lista de hoy aún no está cargada</h2><p>${diaF(fechaSel)} ${fmtF(fechaSel)}. Cuando se suban los PDF del día aparecerá aquí sola, no hace falta recargar.</p>${verUlt}</div>`;
+  if (fechaSel === hoy()) return `<div class="empty"><h2>La lista de hoy aún no está cargada</h2><p>${diaF(fechaSel)} ${fmtF(fechaSel)}. En cuanto lleguen los PDF del día por correo aparecerá aquí sola, no hace falta recargar.</p>${verUlt}</div>`;
   return `<div class="empty"><h2>No hay datos de este día</h2><p>Cuando se carguen los PDF del día aparecerán aquí.</p>${verUlt}</div>`;
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-ver]'); if (b) selectFecha(b.dataset.ver); });
@@ -439,7 +439,7 @@ let fechaSel = null, ultimoHoy = hoy();
 $('#fecha').addEventListener('change', e => selectFecha(e.target.value));
 function renderFechas() {
   const s = $('#fecha'), h = hoy();
-  const opts = dias.map(d => `<option value="${esc(d.id)}">${d.id === h ? 'Hoy · ' : ''}${diaF(d.id)} ${fmtF(d.id)} · ${d.productos.length} productos · ${d.clientes.length} pedidos</option>`);
+  const opts = dias.map(d => `<option value="${esc(d.id)}">${d.id === h ? 'Hoy · ' : ''}${diaF(d.id)} ${fmtF(d.id)} · ${d.productos.length} productos · ${d.clientes.length} pedidos${d.origen === 'correo' ? ' · por correo' : ''}</option>`);
   if (!dias.some(d => d.id === h)) opts.unshift(`<option value="${h}">Hoy · ${diaF(h)} ${fmtF(h)} · sin cargar</option>`);
   s.innerHTML = opts.join('');
   if (fechaSel) s.value = fechaSel;
@@ -483,11 +483,20 @@ setInterval(revisarCambioDeDia, 60000);
 
 /* ================= CARGAR (administradora) ================= */
 let usuario = null, pdfProv = null, pdfDiario = null, cruce = null;
+let unsubReg = null;
 onAuthStateChanged(auth, u => {
   usuario = u;
   $('#login-card').hidden = !!u; $('#admin').hidden = !u;
   if (u) $('#adm-who').textContent = 'Sesión: ' + u.email;
+  if (unsubReg) { unsubReg(); unsubReg = null; }
+  if (u) unsubReg = onSnapshot(query(collection(db, 'registro'), orderBy('ts', 'desc'), limit(12)), snap => renderRegistro(snap.docs.map(x => x.data())), () => { $('#registro').innerHTML = '<li class="small">No se pudo leer el historial (revisa las reglas de Firebase).</li>'; });
 });
+const ETQ = { publicado: '✅ Publicado', 'no-cuadra': '❌ No cuadra (no se publicó)', error: '❌ Error en los PDF', falta: '⚠️ Falta un PDF', duplicado: 'ℹ️ Ya estaba cargado' };
+function renderRegistro(rows) {
+  const ul = $('#registro');
+  if (!rows.length) { ul.innerHTML = '<li class="small">Todavía no ha llegado ningún correo con PDF.</li>'; return; }
+  ul.innerHTML = rows.map(r => `<li class="${esc(r.estado)}"><span class="t">${ETQ[r.estado] || esc(r.estado)}${r.fecha ? ' · día ' + fmtF(r.fecha) : ''}</span><span class="m">${esc(r.mensaje || '')}</span><span class="m">${r.ts ? new Date(r.ts).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}${r.de ? ' · de ' + esc(r.de) : ''}</span></li>`).join('');
+}
 $('#login').addEventListener('submit', async e => {
   e.preventDefault(); const btn = $('#l-btn'), err = $('#l-err'); err.hidden = true; btn.disabled = true; btn.textContent = 'Entrando…';
   try { await signInWithEmailAndPassword(auth, $('#l-email').value.trim(), $('#l-pass').value); $('#l-pass').value = ''; }

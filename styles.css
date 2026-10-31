@@ -198,3 +198,12 @@ nav.tabs a{white-space:nowrap}
 .sec.closed .sec-f{display:none}
 .sec-f .allok{min-height:42px;padding:0 14px;border-radius:999px;font-size:.9rem}
 .sig{margin-left:auto;min-height:42px;padding:0 18px;border-radius:999px;border:0;background:var(--fg);color:var(--bg);font-weight:700;white-space:nowrap}
+
+/* ---------- v4: historial de cargas automáticas ---------- */
+.registro{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.registro li{display:grid;gap:2px;padding:8px 10px;border-radius:8px;background:var(--surface-2);border-left:4px solid var(--line)}
+.registro li.publicado{border-left-color:var(--ok)} .registro li.no-cuadra,.registro li.error{border-left-color:var(--bad)} .registro li.falta{border-left-color:var(--warn)}
+.registro .t{font-weight:600;font-size:.9rem} .registro .m{font-size:.82rem;color:var(--muted);overflow-wrap:anywhere}
+#admin>*{min-width:0}
+#admin .small,#admin .row-flex{overflow-wrap:anywhere}
+.filebox{min-width:0}.filebox input{max-width:100%}
