@@ -60,12 +60,23 @@ const R = pr => rec[pr.k] || {};
 const est = pr => R(pr).estado || null;
 function disponible(pr) { const r = R(pr); if (!r.estado) return null; if (r.estado === 'si') return pr.q; if (r.estado === 'no') return 0; return r.quedan ?? 0; }
 const cliRep = (pr, p) => ((rep[pr.k] || {}).cli || {})[p] || {};
-const lleva = (pr, a) => { const v = cliRep(pr, a.p).lleva; return v == null ? a.q : v; };
+// Cuánto lleva cada cliente. Manda lo que haya puesto una persona; si nadie lo ha decidido:
+//  - si en el proveedor «No hay», nadie lleva nada (0);
+//  - si el producto es para un solo cliente, lleva lo que se recogió.
+const lleva = (pr, a) => {
+  const v = cliRep(pr, a.p).lleva; if (v != null) return v;
+  const d = disponible(pr);
+  if (d === 0) return 0;
+  if (d != null && pr.a.length === 1) return Math.min(a.q, d);
+  return a.q;
+};
+// Una línea está lista si se separó o si ese cliente no lleva nada.
+const lineaLista = (pr, a) => separado(pr, a.p) || lleva(pr, a) === 0;
 const sumaLleva = pr => pr.a.reduce((s, a) => s + lleva(pr, a), 0);
 const corto = pr => { const d = disponible(pr); return d != null && d < pr.q; };
 const porDecidir = pr => { const d = disponible(pr); return d != null && sumaLleva(pr) - d > 0.0001; };
 const separado = (pr, p) => !!cliRep(pr, p).ok;
-const prodListo = pr => pr.a.every(a => separado(pr, a.p));
+const prodListo = pr => pr.a.every(a => lineaLista(pr, a));
 const isEK = pr => pr.um === 'EK';
 const pesosDe = (pr, p) => (cliRep(pr, p).pesos || []);
 const kgCli = (pr, a) => pesosDe(pr, a.p).slice(0, Math.round(lleva(pr, a))).reduce((s, x) => s + (Number(x) || 0), 0);
@@ -240,7 +251,7 @@ function prodHTML(pr) {
     }
     return `<div class="cli${ok ? ' sep' : ''}" data-p="${esc(a.p)}">
       <div class="cn">${esc(cl.nombre)}<small>Pedido ${esc(a.p)} · ${fmtQ(a.q)} ${ek ? 'pzs' : 'uds'}${lv !== a.q ? ` · lleva ${fmtQ(lv)}` : ''}</small></div>
-      <button type="button" class="sepb" aria-pressed="${ok}">${ok ? '✓ Separado' : 'Separar'}</button>
+      ${lv === 0 && !ok ? '<span class="chip-st bad">No lleva</span>' : `<button type="button" class="sepb" aria-pressed="${ok}">${ok ? '✓ Separado' : 'Separar'}</button>`}
       ${row2 ? `<div class="row2">${row2}</div>` : ''}
     </div>`;
   }).join('');
@@ -362,7 +373,7 @@ function renderStats() {
   const st = $('#stats');
   if (!dia) { st.innerHTML = fechaSel === hoy() ? '<span>Esperando la lista de hoy</span>' : '<span>Sin datos para este día</span>'; $('#pbar').style.width = '0'; return; }
   const P = dia.productos, tot = P.length, rev = P.filter(est).length;
-  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
+  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => lineaLista(p, a)).length, 0);
   const falt = P.filter(isIssue1).length, dec = P.filter(porDecidir).length;
   if (vista() === 'reparto') {
     $('#pbar').style.width = (lineas ? sep / lineas * 100 : 0) + '%';
@@ -392,7 +403,7 @@ const ordenCli = obj => dia.clientes.map(c => c.p).filter(p => obj[p]);
 function renderResumen() {
   if (!dia) { ['#res-prov', '#res-cli', '#res-ek'].forEach(s => $(s).innerHTML = ''); $('#sumgrid').innerHTML = ''; $('#msg').textContent = ''; return; }
   const P = dia.productos, D = datosResumen();
-  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
+  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => lineaLista(p, a)).length, 0);
   $('#sumgrid').innerHTML = `<div><b>${P.filter(est).length}/${P.length}</b><span>Recogidos</span></div><div class="g-no"><b>${D.faltProv.length}</b><span>Faltas prov.</span></div><div><b>${sep}/${lineas}</b><span>Separados</span></div><div class="g-par"><b>${Object.keys(D.porCli).length}</b><span>Clientes afect.</span></div>`;
   $('#sumwho').textContent = D.nombres.length ? 'Han marcado: ' + D.nombres.join(', ') : 'Todavía nadie ha marcado.';
   // proveedor
@@ -410,7 +421,7 @@ function renderResumen() {
 }
 function buildMsg(D) {
   const P = dia.productos;
-  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => separado(p, a.p)).length, 0);
+  const lineas = P.reduce((s, p) => s + p.a.length, 0), sep = P.reduce((s, p) => s + p.a.filter(a => lineaLista(p, a)).length, 0);
   let o = `CONTROL · ANTONIO VIÑA · ${fmtF(fecha)}\nMarcaron: ${D.nombres.join(', ') || nombre() || 'Sin indicar'}\nRecogidos ${P.filter(est).length}/${P.length} · Separados ${sep}/${lineas}\n`;
   if (D.faltProv.length) { o += '\nFALTANTES EN PROVEEDOR'; let g = null; D.faltProv.forEach(pr => { const m = R(pr); if (pr.g !== g) { g = pr.g; o += `\n${g}`; } o += `\n• ${pr.c} ${pr.d} — pedido ${fmtQ(pr.q)}` + (m.estado === 'no' ? ' · NO HAY' : m.estado === 'parcial' ? ` · hay ${fmtQ(m.quedan ?? 0)} · faltan ${fmtQ(pr.q - (m.quedan ?? 0))}` : '') + (m.nota ? `\n   Nota: ${m.nota}` : ''); }); o += '\n'; }
   else o += '\nSin faltantes en proveedor.\n';
