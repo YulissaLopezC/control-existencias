@@ -51,18 +51,32 @@ const ES_CABECERA = l => /^(Antonio Viña|Desde |Hasta |Proveedor:|Código produ
 
 // "Ventas por productos" → productos agrupados por proveedor.
 export function parseProveedores(lines) {
-  const productos = []; let g = null, totalDeclarado = null, filtro = null;
-  // «Proveedor: CC» en la cabecera = extracto de un solo proveedor; «Proveedor:» vacío = listado completo
-  for (const l of lines.slice(0, 8)) { const f = l.match(/^Proveedor:\s*(\S+)/i); if (f) { filtro = f[1].toUpperCase(); break; } }
+  // Un mismo PDF puede traer varios informes seguidos: el listado completo («Proveedor:» vacío)
+  // y además extractos de un proveedor («Proveedor: CC»). Se leen por secciones y no se repiten productos.
+  const productos = [], vistos = new Set(), totales = [];
+  let g = null, filtroActual = null, haySeccionCompleta = false, filtroUnico = null;
   for (const l of lines) {
-    if (!l || ES_CABECERA(l)) continue;
+    if (!l) continue;
+    const fp = l.match(/^Proveedor:\s*([A-Z]{2,5})?\s*$/i);
+    if (fp) {
+      filtroActual = fp[1] ? fp[1].toUpperCase() : null;
+      if (!filtroActual) haySeccionCompleta = true; else if (!filtroUnico) filtroUnico = filtroActual;
+      continue;
+    }
+    if (ES_CABECERA(l)) continue;
     let m = l.match(/^Total productos:\s*(\d+)/i);
-    if (m) { totalDeclarado = Number(m[1]); continue; }
+    if (m) { totales.push({ n: Number(m[1]), filtro: filtroActual }); continue; }
     if (/^[A-Z]{2,5}$/.test(l)) { g = l; continue; }
     m = l.match(new RegExp('^(\\S+)\\s+' + NUM + '\\s+(.+)$'));
-    if (m && g) productos.push({ g, c: m[1], q: num(m[2]), d: m[3].trim() });
+    if (m && g) {
+      if (vistos.has(m[1])) continue;              // ya estaba en otro informe del mismo PDF
+      vistos.add(m[1]);
+      productos.push({ g, c: m[1], q: num(m[2]), d: m[3].trim() });
+    }
   }
-  return { fecha: fechaDe(lines), productos, totalDeclarado, filtro };
+  const completo = totales.find(t => !t.filtro);
+  const totalDeclarado = completo ? completo.n : (totales.length === 1 ? totales[0].n : null);
+  return { fecha: fechaDe(lines), productos, totalDeclarado, filtro: haySeccionCompleta ? null : filtroUnico };
 }
 
 // "Diario de ventas" → pedidos de clientes con sus líneas.
