@@ -5,7 +5,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import { firebaseConfig } from './firebase-config.js?v=4';
-import { pdfLines, tipoDePdf, parseProveedores, parseDiario, cruzar } from './parser.js?v=4';
+import { pdfLines, tipoDePdf, parseProveedores, parseDiario, cruzar } from './parser.js?v=10';
 
 /* ================= utilidades ================= */
 const $ = s => document.querySelector(s);
@@ -521,6 +521,7 @@ async function onFile(file, esperado) {
     const lines = await leerPdf(file);
     const tipo = tipoDePdf(lines);
     if (!tipo) throw new Error('Este PDF no parece ni «Ventas por productos» ni «Diario de ventas»');
+    if (tipo === 'almacen') throw new Error('Este es el «Diario de ventas por Almacén»: no hace falta. Sube el «Diario de ventas detallado UM»');
     if (tipo === 'proveedores') { pdfProv = parseProveedores(lines); marcarBox('#fb-prov', `${file.name} · ${pdfProv.productos.length} productos`); }
     else { pdfDiario = parseDiario(lines); marcarBox('#fb-diario', `${file.name} · ${pdfDiario.pedidos.length} pedidos`); }
     if (tipo !== esperado) toast('Ese PDF era el otro listado; lo puse en su sitio');

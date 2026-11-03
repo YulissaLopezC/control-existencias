@@ -34,6 +34,7 @@ export async function pdfLines(pdfjsLib, data) {
 export function tipoDePdf(lines) {
   const head = lines.slice(0, 6).join(' ');
   if (/Ventas por productos/i.test(head)) return 'proveedores';
+  if (/Diario de ventas por Almac[eé]n/i.test(head)) return 'almacen'; // mismo contenido ordenado por almacén: no se usa para cruzar
   if (/Diario de ventas/i.test(head)) return 'diario';
   return null;
 }
@@ -50,7 +51,9 @@ const ES_CABECERA = l => /^(Antonio Viña|Desde |Hasta |Proveedor:|Código produ
 
 // "Ventas por productos" → productos agrupados por proveedor.
 export function parseProveedores(lines) {
-  const productos = []; let g = null, totalDeclarado = null;
+  const productos = []; let g = null, totalDeclarado = null, filtro = null;
+  // «Proveedor: CC» en la cabecera = extracto de un solo proveedor; «Proveedor:» vacío = listado completo
+  for (const l of lines.slice(0, 8)) { const f = l.match(/^Proveedor:\s*(\S+)/i); if (f) { filtro = f[1].toUpperCase(); break; } }
   for (const l of lines) {
     if (!l || ES_CABECERA(l)) continue;
     let m = l.match(/^Total productos:\s*(\d+)/i);
@@ -59,7 +62,7 @@ export function parseProveedores(lines) {
     m = l.match(new RegExp('^(\\S+)\\s+' + NUM + '\\s+(.+)$'));
     if (m && g) productos.push({ g, c: m[1], q: num(m[2]), d: m[3].trim() });
   }
-  return { fecha: fechaDe(lines), productos, totalDeclarado };
+  return { fecha: fechaDe(lines), productos, totalDeclarado, filtro };
 }
 
 // "Diario de ventas" → pedidos de clientes con sus líneas.
@@ -73,6 +76,13 @@ export function parseDiario(lines) {
     if (m) { cur = { p: m[1], n: m[2], nombre: m[3].trim(), lineas: [] }; pedidos.push(cur); }
   }
   return { fecha: fechaDe(lines), pedidos };
+}
+
+// Une un extracto de un proveedor con el listado que ya había: reemplaza solo ese proveedor.
+export function combinarProveedores(previo, nuevo) {
+  if (!previo || !nuevo.filtro) return nuevo;            // listado completo: manda el nuevo
+  const resto = previo.productos.filter(p => p.g !== nuevo.filtro);
+  return { ...previo, productos: [...resto, ...nuevo.productos], totalDeclarado: null };
 }
 
 // Cruce: une ambos listados y comprueba que las cantidades cuadren.

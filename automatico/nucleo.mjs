@@ -9,9 +9,9 @@
 //  5. Si pasa un tiempo y solo llegó uno, avisa de que falta el otro (revisarFaltantes).
 
 import { createHash } from 'node:crypto';
-import { pdfLines, tipoDePdf, parseProveedores, parseDiario, cruzar } from '../parser.js';
+import { pdfLines, tipoDePdf, parseProveedores, parseDiario, cruzar, combinarProveedores } from '../parser.js';
 
-export const NOMBRE = { proveedores: 'Ventas por productos', diario: 'Diario de ventas' };
+export const NOMBRE = { proveedores: 'Ventas por productos', diario: 'Diario de ventas', almacen: 'Diario de ventas por Almacén' };
 const fmtF = id => { const [y, m, d] = id.split('-'); return `${d}/${m}/${y}`; };
 export const huella = buf => createHash('sha256').update(buf).digest('hex');
 const esPdf = a => /\.pdf$/i.test(a.nombre || '') || /pdf/i.test(a.tipo || '');
@@ -26,25 +26,37 @@ const esPdf = a => /\.pdf$/i.test(a.nombre || '') || /pdf/i.test(a.tipo || '');
 export async function procesarCorreo({ correo, store, avisar, pdfjs, cfg }) {
   const ahora = (cfg.ahora || new Date()).toISOString();
   const pdfs = (correo.adjuntos || []).filter(esPdf);
-  const res = { correo: correo.id, recibidos: [], duplicados: [], errores: [], fechas: new Set(), publicados: [], noCuadra: [] };
+  const res = { correo: correo.id, recibidos: [], duplicados: [], errores: [], ignorados: [], fechas: new Set(), publicados: [], noCuadra: [] };
   if (!pdfs.length) return res;
 
   for (const a of pdfs) {
     const h = huella(a.contenido);
     const previa = await store.getCarga(h);
-    if (previa) { res.duplicados.push({ nombre: a.nombre, fecha: previa.fecha, tipo: previa.tipo }); continue; }
+    // Solo se ignora si ese mismo PDF ya acabó publicado; si quedó sin publicar (no cuadraba, faltaba el otro…) se vuelve a procesar.
+    if (previa && (previa.estado === 'publicado' || previa.estado === 'ignorado')) { res.duplicados.push({ nombre: a.nombre, fecha: previa.fecha, tipo: previa.tipo }); continue; }
     let lines;
     try { lines = await pdfLines(pdfjs, new Uint8Array(a.contenido)); }
     catch (e) { res.errores.push(`«${a.nombre}»: no se pudo leer el PDF (${e.message}).`); continue; }
     const tipo = tipoDePdf(lines);
     if (!tipo) { res.errores.push(`«${a.nombre}»: no es ni «Ventas por productos» ni «Diario de ventas».`); continue; }
+    if (tipo === 'almacen') {
+      res.ignorados.push(`«${a.nombre}» (${NOMBRE.almacen}): no hace falta, se ignora.`);
+      await store.setCarga(h, { hash: h, tipo, fecha: null, nombre: a.nombre, de: correo.de, asunto: correo.asunto || '', estado: 'ignorado', ts: ahora });
+      continue;
+    }
     const datos = tipo === 'proveedores' ? parseProveedores(lines) : parseDiario(lines);
     const cuenta = tipo === 'proveedores' ? datos.productos.length : datos.pedidos.length;
     if (!datos.fecha) { res.errores.push(`«${a.nombre}» (${NOMBRE[tipo]}): no encontré la fecha dentro del PDF.`); continue; }
     if (!cuenta) { res.errores.push(`«${a.nombre}» (${NOMBRE[tipo]}): no encontré ${tipo === 'proveedores' ? 'productos' : 'pedidos'} dentro del PDF.`); continue; }
 
     const b = (await store.getBandeja(datos.fecha)) || { fecha: datos.fecha, primeraLlegada: ahora };
-    b[tipo] = { datos, hash: h, nombre: a.nombre, de: correo.de, recibido: ahora };
+    if (tipo === 'proveedores' && datos.filtro && b.proveedores) {
+      // Extracto de un solo proveedor: se combina con el listado que ya había
+      const ant = b.proveedores;
+      b.proveedores = { datos: combinarProveedores(ant.datos, datos), hash: ant.hash, extras: [...(ant.extras || []), h], nombre: ant.nombre + ' + ' + a.nombre, de: correo.de, recibido: ahora };
+    } else {
+      b[tipo] = { datos, hash: h, extras: [], nombre: a.nombre, de: correo.de, recibido: ahora };
+    }
     b.estado = 'esperando'; b.avisoFalta = false; b.actualizado = ahora;
     await store.setBandeja(datos.fecha, b);
     await store.setCarga(h, { hash: h, tipo, fecha: datos.fecha, nombre: a.nombre, de: correo.de, asunto: correo.asunto || '', estado: 'recibido', ts: ahora });
@@ -59,7 +71,7 @@ export async function procesarCorreo({ correo, store, avisar, pdfjs, cfg }) {
     const X = cruzar(b.proveedores.datos, b.diario.datos);
     const lineas = X.productos.reduce((s, p) => s + p.a.length, 0);
     const ek = X.productos.filter(p => p.um === 'EK').length;
-    const hashes = [b.proveedores.hash, b.diario.hash];
+    const hashes = [b.proveedores.hash, ...(b.proveedores.extras || []), b.diario.hash, ...(b.diario.extras || [])];
     if (X.problemas.length) {
       b.estado = 'no-cuadra'; b.actualizado = ahora; await store.setBandeja(fecha, b);
       for (const h of hashes) await store.updCarga(h, { estado: 'no-cuadra' });
@@ -138,6 +150,7 @@ export function mensajeResultado(res, cfg) {
     partes.push(`📥 Recibí «${NOMBRE[r.tipo]}» del ${fmtF(r.fecha)} (${r.cuenta} ${r.tipo === 'proveedores' ? 'productos' : 'pedidos'}). Falta el otro PDF; la lista se publicará cuando llegue.`);
   }
   if (res.errores.length) { asunto = asunto || '❌ No se pudieron procesar los PDF'; partes.push('❌ Problemas con los adjuntos:\n' + res.errores.map(e => '• ' + e).join('\n')); }
+  if (res.ignorados.length && partes.length) partes.push('ℹ️ ' + res.ignorados.join(' '));
   if (res.duplicados.length && !res.recibidos.length) { asunto = asunto || 'ℹ️ Estos PDF ya estaban cargados'; partes.push('ℹ️ ' + res.duplicados.map(d => `«${d.nombre}»`).join(', ') + ' ya se habían procesado antes. No se cargó nada de nuevo.'); }
   else if (res.duplicados.length) partes.push('ℹ️ Ya estaban cargados y se ignoraron: ' + res.duplicados.map(d => `«${d.nombre}»`).join(', ') + '.');
   if (!partes.length) return null;
