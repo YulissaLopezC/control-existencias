@@ -33,7 +33,14 @@ export async function procesarCorreo({ correo, store, avisar, pdfjs, cfg }) {
     const h = huella(a.contenido);
     const previa = await store.getCarga(h);
     // Solo se ignora si ese mismo PDF ya acabó publicado; si quedó sin publicar (no cuadraba, faltaba el otro…) se vuelve a procesar.
-    if (previa && (previa.estado === 'publicado' || previa.estado === 'ignorado')) { res.duplicados.push({ nombre: a.nombre, fecha: previa.fecha, tipo: previa.tipo }); continue; }
+    let saltar = false;
+    if (previa && previa.tipo === 'almacen') saltar = true;
+    else if (previa && previa.estado === 'publicado' && previa.fecha) {
+      const dia = await store.getDia(previa.fecha);           // solo si ese PDF está de verdad en la lista publicada
+      saltar = !!(dia && (dia.hashes || []).includes(h));
+    }
+    console.log(`   · ${a.nombre}: ${previa ? 'visto antes (' + previa.estado + ', ' + previa.tipo + ')' : 'nuevo'}${saltar ? ' → se omite' : ''}`);
+    if (saltar) { res.duplicados.push({ nombre: a.nombre, fecha: previa.fecha, tipo: previa.tipo }); continue; }
     let lines;
     try { lines = await pdfLines(pdfjs, new Uint8Array(a.contenido)); }
     catch (e) { res.errores.push(`«${a.nombre}»: no se pudo leer el PDF (${e.message}).`); continue; }
@@ -45,6 +52,7 @@ export async function procesarCorreo({ correo, store, avisar, pdfjs, cfg }) {
       continue;
     }
     const datos = tipo === 'proveedores' ? parseProveedores(lines) : parseDiario(lines);
+    console.log(`     ${NOMBRE[tipo]} · ${datos.fecha} · ${tipo === 'proveedores' ? datos.productos.length + ' productos' + (datos.filtro ? ' (solo proveedor ' + datos.filtro + ')' : '') : datos.pedidos.length + ' pedidos'}`);
     const cuenta = tipo === 'proveedores' ? datos.productos.length : datos.pedidos.length;
     if (!datos.fecha) { res.errores.push(`«${a.nombre}» (${NOMBRE[tipo]}): no encontré la fecha dentro del PDF.`); continue; }
     if (!cuenta) { res.errores.push(`«${a.nombre}» (${NOMBRE[tipo]}): no encontré ${tipo === 'proveedores' ? 'productos' : 'pedidos'} dentro del PDF.`); continue; }
@@ -82,7 +90,7 @@ export async function procesarCorreo({ correo, store, avisar, pdfjs, cfg }) {
     const previo = await store.getDia(fecha);
     await store.setDia(fecha, {
       fecha, creada: ahora, por: 'correo', origen: 'correo',
-      archivos: { proveedores: b.proveedores.nombre, diario: b.diario.nombre },
+      archivos: { proveedores: b.proveedores.nombre, diario: b.diario.nombre }, hashes,
       productos: X.productos.map(p => ({ g: p.g, c: p.c, q: p.q, d: p.d, k: p.k, um: p.um, a: p.a })),
       clientes: X.clientes, problemas: 0,
     });
