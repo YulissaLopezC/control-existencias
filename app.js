@@ -1,7 +1,7 @@
 import {
-  DEMO, db, auth, doc, collection, setDoc, deleteDoc, onSnapshot, query, orderBy, limit, runTransaction,
+  DEMO, MODO, db, auth, doc, collection, setDoc, deleteDoc, onSnapshot, query, orderBy, limit, runTransaction,
   onAuthStateChanged, signInWithEmailAndPassword, signOut, borrarDatosDemo,
-} from './fb.js?v=20';
+} from './fb.js?v=21';
 import { pdfLines, tipoDePdf, parseProveedores, parseDiario, cruzar } from './parser.js?v=11';
 
 /* ================= utilidades ================= */
@@ -61,8 +61,14 @@ function route() {
 addEventListener('hashchange', route);
 
 /* ================= usuarios y entrada ================= */
-if (DEMO) { $('#demo-banner').hidden = false; }
-$('#demo-borrar').addEventListener('click', () => { if (borrarDatosDemo) { borrarDatosDemo(); toast('Datos de prueba borrados'); } });
+if (DEMO) {
+  $('#demo-banner').hidden = false;
+  if (MODO === 'prueba') $('#demo-texto').textContent = 'Versión de prueba · Usa datos de prueba aparte: no cambia nada de la app real.';
+}
+$('#demo-borrar').addEventListener('click', async () => {
+  if (!borrarDatosDemo || !confirm('¿Borrar todos los datos de prueba? (los datos reales no se tocan)')) return;
+  try { await borrarDatosDemo(); toast('Datos de prueba borrados'); } catch (x) { console.error(x); toast('No se pudo borrar. Inténtalo de nuevo'); }
+});
 let elegido = null, authUser = null;
 onSnapshot(collection(db, 'usuarios'), snap => {
   const m = {}; snap.forEach(x => m[x.id] = x.data()); usuarios = m;

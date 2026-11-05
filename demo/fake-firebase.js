@@ -6,20 +6,13 @@ const clone = o => (o == null ? o : JSON.parse(JSON.stringify(o)));
 const leer = () => { try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { return {}; } };
 let store = leer();
 
-// Usuarios de ejemplo (PIN = contraseña)
-export const USUARIOS_DEMO = [
-  { uid: 'u-jlara', nombre: 'Juan Lara', rol: 'chofer', color: '#1f6fb5', pin: '111111' },
-  { uid: 'u-jluna', nombre: 'Juan Luna', rol: 'chofer', color: '#b3407d', pin: '222222' },
-  { uid: 'u-dgarcia', nombre: 'David García', rol: 'chofer', color: '#2e8a57', pin: '333333' },
-  { uid: 'u-alexis', nombre: 'Alexis', rol: 'chofer', color: '#c2650f', pin: '444444' },
-  { uid: 'u-antonio', nombre: 'Don Antonio', rol: 'oficina', color: '#5a4fb0', pin: '555555' },
-  { uid: 'u-yulissa', nombre: 'Yulissa', rol: 'oficina', color: '#0f8a8a', pin: '666666' },
-].map((u, i) => ({ ...u, email: u.uid.slice(2) + '@demo.local', orden: i }));
+import { USUARIOS_DEMO, fichaUsuario, crearSesion } from './usuarios.js?v=1';
+export { USUARIOS_DEMO };
 function sembrar() {
   let cambio = false;
   for (const u of USUARIOS_DEMO) {
     const p = 'usuarios/' + u.uid;
-    if (!store[p]) { store[p] = { nombre: u.nombre, rol: u.rol, color: u.color, email: u.email, orden: u.orden, pinDemo: u.pin }; cambio = true; }
+    if (!store[p]) { store[p] = fichaUsuario(u); cambio = true; }
   }
   if (cambio) guardar();
 }
@@ -77,17 +70,6 @@ export async function runTransaction(_, fn) {
 }
 
 // --- Sesión de prueba (por pestaña) ---
-const authSubs = new Set();
-const sesion = () => { try { return JSON.parse(sessionStorage.getItem(SKEY) || 'null'); } catch (e) { return null; } };
-export function onAuthStateChanged(_, cb) { authSubs.add(cb); setTimeout(() => cb(sesion()), 0); return () => authSubs.delete(cb); }
-export async function signInWithEmailAndPassword(_, email, pass) {
-  const u = USUARIOS_DEMO.find(x => x.email === String(email).toLowerCase());
-  if (!u || u.pin !== pass) { const e = new Error('PIN incorrecto'); e.code = 'auth/invalid-credential'; throw e; }
-  const s = { uid: u.uid, email: u.email };
-  try { sessionStorage.setItem(SKEY, JSON.stringify(s)); } catch (e) { }
-  authSubs.forEach(cb => cb(s));
-  return { user: s };
-}
-export async function signOut() { try { sessionStorage.removeItem(SKEY); } catch (e) { } authSubs.forEach(cb => cb(null)); }
+export const { onAuthStateChanged, signInWithEmailAndPassword, signOut } = crearSesion(SKEY);
 
 export function borrarDatosDemo() { store = {}; sembrar(); guardar(); avisar(); }
