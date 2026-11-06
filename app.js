@@ -280,7 +280,7 @@ function refreshReparto() {
     const done = its.filter(prodListo).length, comp = done === its.length;
     sec.querySelector('.cnt').textContent = comp ? `✓ Completo · ${its.length} productos separados` : `${done} de ${its.length} productos separados`;
     sec.classList.toggle('completo', comp);
-    sec.querySelector('[data-allsep]').hidden = !its.some(pr => lineasSinNovedad(pr).length);
+    sec.querySelector('[data-allsep]').hidden = comp;
     sec.hidden = !its.some(i => !document.getElementById('r-' + i.k).hidden);
   });
 }
@@ -301,9 +301,9 @@ function saveRep(pr, p, patch) {
   const body = { codigo: pr.c, nombre: nombre(), ts: new Date().toISOString(), cli: { [p]: merged } };
   pendRep[pr.k] = (pendRep[pr.k] || Promise.resolve()).then(() => setDoc(ref, body, { merge: true })).catch(errGuardar);
 }
-// «Marcar todo Separado»: solo las líneas sin novedad. Quedan sin separar los productos que
-// no se han recogido, los que tienen «No hay», «Faltan algunas» o nota, y los EK sin todos los pesos.
-const sinNovedad = pr => est(pr) === 'si' && !(R(pr).nota && R(pr).nota.trim()) && !porDecidir(pr);
+// «Marcar todo Separado»: solo las líneas sin novedad. Quedan sin separar los productos con
+// «No hay», «Faltan algunas» o nota, y los EK sin todos los pesos.
+const sinNovedad = pr => (!est(pr) || est(pr) === 'si') && !(R(pr).nota && R(pr).nota.trim()) && !porDecidir(pr);
 const lineasSinNovedad = pr => !sinNovedad(pr) ? [] : pr.a.filter(a => !separado(pr, a.p) && lleva(pr, a) > 0
   && (!isEK(pr) || piezasPesadas(pr, a) >= Math.round(lleva(pr, a))));
 function marcarTodoSeparado(g) {
