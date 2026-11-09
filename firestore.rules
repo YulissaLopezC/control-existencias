@@ -2,31 +2,58 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Solo esta cuenta puede subir/reemplazar los PDF a mano desde la app.
-    // Cambia el correo por el que creaste en Authentication.
-    // (La carga automática por correo usa una cuenta de servicio y no pasa por estas reglas.)
+    // Cuenta de administración (sube los PDF a mano desde «Entrar con correo»).
+    // La carga automática por correo usa una cuenta de servicio y no pasa por estas reglas.
     function esAdmin() {
-      return request.auth != null && request.auth.token.email == 'TU_CORREO@gmail.com';
+      return request.auth != null && request.auth.token.email == 'existenciascontrolbd@gmail.com';
+    }
+    // Cualquiera que haya entrado con su nombre y PIN (chóferes y oficina).
+    function conSesion() {
+      return request.auth != null;
+    }
+    // Oficina: la cuenta de administración o un usuario con rol «oficina» (Don Antonio, Yulissa).
+    function esOficina() {
+      return esAdmin() || (conSesion()
+        && get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'oficina');
+    }
+
+    // Lista de personas para la pantalla «¿Quién eres?». Solo se crean con la tarea «Crear usuarios».
+    match /usuarios/{uid} {
+      allow read: if true;
+      allow write: if esAdmin();
+    }
+
+    // Ajustes compartidos: almacenes habituales de cada chófer y prioridad de clientes.
+    match /config/{doc} {
+      allow read: if true;
+      allow write: if conSesion();
     }
 
     match /dias/{fecha} {
-      // La lista del día: todos la ven, solo la administradora la publica a mano.
+      // La lista del día: todos la ven, solo oficina la publica a mano.
       allow read: if true;
-      allow write: if esAdmin();
+      allow write: if esOficina();
 
-      // Marcas de recogida y reparto: los repartidores marcan sin iniciar sesión,
-      // pero solo dentro de un día que exista.
-      match /{paso}/{producto} {
-        allow read: if paso in ['recogida', 'reparto'];
-        allow write: if paso in ['recogida', 'reparto']
+      // Marcas del día: recogida, reparto, clientes asignados, traspasos y almacenes por chófer.
+      // Hay que haber entrado con PIN, y solo dentro de un día que exista.
+      match /{paso}/{id} {
+        allow read: if true;
+        allow write: if conSesion()
+          && paso in ['recogida', 'reparto', 'asignaciones', 'traspasos', 'almacenes']
           && exists(/databases/$(database)/documents/dias/$(fecha));
       }
     }
 
-    // Historial de cargas automáticas: solo lo ve la administradora en la pestaña «Cargar».
+    // Historial de cargas automáticas: lo ve oficina en la pestaña «Cargar».
     match /registro/{id} {
-      allow read: if esAdmin();
+      allow read: if esOficina();
     }
     // bandeja/ y cargas/ son internas del proceso automático: nadie las lee desde la app.
+
+    // Versión de prueba (control-existencias-prueba): datos aparte, no tocan nada de lo real.
+    match /prueba_dias/{doc=**} { allow read, write: if true; }
+    match /prueba_config/{doc=**} { allow read, write: if true; }
+    match /prueba_usuarios/{doc=**} { allow read, write: if true; }
+    match /prueba_registro/{doc=**} { allow read, write: if true; }
   }
 }

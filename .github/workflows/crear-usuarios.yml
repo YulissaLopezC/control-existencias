@@ -1,0 +1,25 @@
+name: Crear usuarios
+
+# Se lanza a mano (Actions → Crear usuarios → Run workflow).
+# Crea o actualiza las cuentas de los chóferes y de oficina con su PIN.
+on:
+  workflow_dispatch:
+
+jobs:
+  crear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: automatico
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: automatico/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: node crear-usuarios.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
