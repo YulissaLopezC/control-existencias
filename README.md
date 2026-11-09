@@ -5,7 +5,8 @@ App web para celular (GitHub Pages + Firebase) que cruza los dos PDF diarios del
 - **Ventas por productos** → qué recoger en cada proveedor.
 - **Diario de ventas** → qué lleva cada cliente.
 
-Enlace: https://yulissalopezc.github.io/control-existencias/
+**La app oficial está en https://yulissalopezc.github.io/control-existencias-prueba/** (repo `control-existencias-prueba`).
+Este enlace antiguo solo redirige allí. Este repo se sigue usando para la carga automática por correo y la tarea «Crear usuarios», porque aquí están los secretos.
 
 ## Flujo del día
 

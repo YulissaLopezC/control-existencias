@@ -18,7 +18,7 @@ const ETIQUETA = 'ce-procesado';
 const env = k => { const v = process.env[k]; if (!v) { console.error(`Falta la variable ${k}`); process.exit(1); } return v; };
 const USER = env('GMAIL_USER'), PASS = env('GMAIL_APP_PASSWORD').replace(/\s+/g, '');
 const cfg = {
-  appUrl: process.env.APP_URL || 'https://yulissalopezc.github.io/control-existencias/',
+  appUrl: process.env.APP_URL || 'https://yulissalopezc.github.io/control-existencias-prueba/',
   avisoExtra: (process.env.AVISO_EMAILS || USER).split(',').map(s => s.trim()).filter(Boolean),
   esperaMin: Number(process.env.ESPERA_MIN || 30),
 };

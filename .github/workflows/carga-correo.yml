@@ -30,4 +30,4 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           AVISO_EMAILS: ${{ secrets.AVISO_EMAILS }}
-          APP_URL: https://yulissalopezc.github.io/control-existencias/
+          APP_URL: https://yulissalopezc.github.io/control-existencias-prueba/
